@@ -30,8 +30,8 @@ import psutil
 
 from blocking import BLOCK_VERSION, BlockIndex
 from config import CACHE_DIR, NORM_VERSION, OUTPUT_DIR, ROOT, RUNS_DIR, VALIDATOR, Config
-from features import (FEATURES, RR_FEATURES, TEXT_COLS, add_name_counts, build_features, country_context,
-                      rerank_sims)
+from features import (FEATURES, IDF_FEATURES, IDF_RANKS, RR_FEATURES, TEXT_COLS, _idf_init, _idf_rows,
+                      add_name_counts, build_features, country_context, rerank_sims)
 from hwmon import HwMonitor
 from io_utils import load_ground_truth
 from tracking import Run, record_lb_score
@@ -188,7 +188,7 @@ def iter_country_blocks(split: str, s1_all: pl.DataFrame, cfg: Config, run: Run,
         pool_c = scan_norm(split, "pool").filter(pl.col("country_n") == c).select(NORM_COLS).collect()
         s1_pop = scan_norm(split, "s1").filter(pl.col("country_n") == c)
         s1_c, pool_c = add_name_counts([s1_c, pool_c], pool_c, s1_pop)
-        ctx = country_context(s1_pop)  # address stop tokens + S1 name vocabulary (unlabelled S1 population)
+        ctx = country_context(s1_pop, pool=pool_c)  # stop tokens, S1 name vocabulary, IDF (unlabelled data)
         run.log(f"[{c}] S1 {s1_c.height:,}  pool {pool_c.height:,}: building index (RAM avail {avail_gb():.1f}GB)")
         index, hit = country_index(split, c, pool_c, cfg)
         run.log(f"[{c}] index {'loaded from cache' if hit else 'built + cached'}: keys kept {len(index.idf):,}/"
@@ -228,12 +228,18 @@ class Model:
 
     def __init__(self, kind: str, booster, device: str = "cpu"):
         self.kind, self.booster, self.device = kind, booster, device
+        # the feature list the booster was trained with (older models predate later FEATURES additions)
+        names = booster.feature_names if kind == "xgb" else booster.feature_name()
+        self.features = list(names) if names else FEATURES
 
     def predict(self, X: np.ndarray) -> np.ndarray:
         if self.kind == "xgb":
             import xgboost as xgb
-            return self.booster.predict(xgb.DMatrix(X, feature_names=FEATURES))
+            return self.booster.predict(xgb.DMatrix(X, feature_names=self.features))
         return self.booster.predict(X, num_iteration=self.booster.best_iteration or None)
+
+    def predict_df(self, df: pl.DataFrame) -> np.ndarray:
+        return self.predict(df.select(self.features).to_numpy())
 
     def save(self, run_dir: Path) -> None:
         if self.kind == "xgb":
@@ -275,7 +281,8 @@ def _train_parts(files: list[Path]) -> pl.DataFrame:
 
 def train_model(cfg: Config, run: Run, train_files: list[Path], va: pl.DataFrame) -> Model:
     """train_files: per-chunk feature parquet on D: (val / early-stop rows skipped); va: in-RAM early-stop frame."""
-    Xva, yva = va.select(FEATURES).to_numpy(), va["label"].to_numpy()
+    TF = [f for f in FEATURES if f not in set(cfg.extra.get("drop_feats") or [])]  # optional ablation
+    Xva, yva = va.select(TF).to_numpy(), va["label"].to_numpy()
     curve = Curve(run.dir / "train_curve.csv")
     if cfg.model == "xgb":
         import xgboost as xgb
@@ -292,10 +299,13 @@ def train_model(cfg: Config, run: Run, train_files: list[Path], va: pl.DataFrame
                 if self.i == len(train_files):
                     return False
                 df = pl.read_parquet(train_files[self.i]).filter(~pl.col("is_val") & ~pl.col("is_es"))
+                wt = (df["w"] if "w" in df.columns else pl.Series([1.0] * df.height)).cast(pl.Float32).to_numpy()
+                if cfg.extra.get("crowd_w"):  # up-weight crowded S1 (long candidate lists): look-alike-dense countries
+                    wt = wt * np.where(df["n_cands"].to_numpy() >= 15, cfg.extra["crowd_w"], 1.0).astype(np.float32)
                 # optional per-row weight column "w" (pseudo-labelled rows from an unseen country)
-                input_data(data=df.select(FEATURES).to_numpy(), label=df["label"].to_numpy(),
-                           weight=(df["w"] if "w" in df.columns else pl.Series([1.0] * df.height)).cast(pl.Float32).to_numpy(),
-                           feature_names=FEATURES)
+                input_data(data=df.select(TF).to_numpy(), label=df["label"].to_numpy(),
+                                      weight=wt,
+                           feature_names=TF)
                 self.i += 1
                 return True
 
@@ -306,8 +316,11 @@ def train_model(cfg: Config, run: Run, train_files: list[Path], va: pl.DataFrame
         params = dict(objective="binary:logistic", eval_metric=["aucpr", "logloss"], tree_method="hist",
                       device=dev, eta=cfg.xgb_lr, max_depth=cfg.xgb_depth, min_child_weight=5, subsample=0.8,
                       colsample_bytree=0.8, reg_lambda=1.0, max_bin=256, seed=cfg.seed, nthread=cfg.n_jobs)
+        if cfg.extra.get("monotone"):
+            from features import monotone
+            params["monotone_constraints"] = str(monotone(TF)).replace(" ", "")
         dtr = xgb.QuantileDMatrix(PartIter(), max_bin=256)
-        dva = xgb.QuantileDMatrix(Xva, yva, ref=dtr, feature_names=FEATURES)
+        dva = xgb.QuantileDMatrix(Xva, yva, ref=dtr, feature_names=TF)
         run.log(f"xgboost {xgb.__version__} device={dev} train {dtr.num_row():,} rows (streamed from "
                 f"{len(train_files)} parts) val {len(yva):,} pos_rate_val {yva.mean():.4f}")
 
@@ -325,17 +338,17 @@ def train_model(cfg: Config, run: Run, train_files: list[Path], va: pl.DataFrame
         best = bst.best_iteration
         bst = bst[: best + 1]
         gain = bst.get_score(importance_type="total_gain")
-        imp = {f: round(float(gain.get(f, 0.0)), 1) for f in FEATURES}
+        imp = {f: round(float(gain.get(f, 0.0)), 1) for f in TF}
         model = Model("xgb", bst, dev)
     else:
         import lightgbm as lgb
         tr = _train_parts(train_files)
-        Xtr, ytr = tr.select(FEATURES).to_numpy(), tr["label"].to_numpy()
+        Xtr, ytr = tr.select(TF).to_numpy(), tr["label"].to_numpy()
         del tr
         params = dict(objective="binary", metric=["binary_logloss", "average_precision"], learning_rate=cfg.xgb_lr,
                       num_leaves=cfg.extra.get("lgb_leaves", 63), min_data_in_leaf=50, feature_fraction=0.8, bagging_fraction=0.8,
                       bagging_freq=1, lambda_l2=1.0, num_threads=cfg.n_jobs, verbose=-1, seed=cfg.seed)
-        dtr = lgb.Dataset(Xtr, ytr, feature_name=FEATURES)
+        dtr = lgb.Dataset(Xtr, ytr, feature_name=TF)
         dva = lgb.Dataset(Xva, yva, reference=dtr)
 
         def _cb(env):
@@ -349,7 +362,7 @@ def train_model(cfg: Config, run: Run, train_files: list[Path], va: pl.DataFrame
         bst = lgb.train(params, dtr, cfg.xgb_rounds, valid_sets=[dtr, dva], valid_names=["train", "val"],
                         callbacks=[lgb.early_stopping(cfg.xgb_early_stop, first_metric_only=True, verbose=False), _cb])
         best = bst.best_iteration
-        imp = dict(zip(FEATURES, bst.feature_importance("gain").round(1).tolist()))
+        imp = dict(zip(TF, bst.feature_importance("gain").round(1).tolist()))
         model = Model("lgb", bst, "cpu")
     model.save(run.dir)
     imp = dict(sorted(imp.items(), key=lambda x: -x[1]))
@@ -448,7 +461,7 @@ def score_competitors(cfg: Config, run: Run, model: Model, reranker, va: pl.Data
     if s1o.height:
         for c, part, pool_c, feats in iter_country_blocks("train", s1o, cfg, run, reranker):
             out.append(feats.select(pl.col("s1_idx").cast(pl.Int64), pl.col("cand_idx").cast(pl.Int64)).with_columns(
-                pl.Series("p", model.predict(feats.select(FEATURES).to_numpy()), dtype=pl.Float32)))
+                pl.Series("p", model.predict_df(feats), dtype=pl.Float32)))
     return pl.concat(out).filter(pl.col("p") >= cfg.p_floor)
 
 
@@ -566,7 +579,7 @@ def score_and_tune(cfg: Config, run: Run, model: Model, reranker, va: pl.DataFra
     """Score val features, score competitor S1, tune the decision. vtruth: every val S1 (s1_idx, s1_id, n_true,
     country_n, block), incl. those without candidates."""
     va = va.select("s1_idx", "cand_idx", "label").with_columns(
-        pl.Series("p", model.predict(va.select(FEATURES).to_numpy()), dtype=pl.Float32))
+        pl.Series("p", model.predict_df(va), dtype=pl.Float32))
     va.write_parquet(run.dir / "val_scored.parquet")  # for offline error analysis / re-decisions
     scored = va
     if cfg.extra.get("use_comp", True):
@@ -603,6 +616,43 @@ def score_and_tune(cfg: Config, run: Run, model: Model, reranker, va: pl.DataFra
     run.log(f"metric val_f05={dec['f05']:.5f} P={dec['precision']:.4f} R={dec['recall']:.4f} "
             f"decision={dec['mode']}:{dec['param']} excl={dec['excl']} by_country={per_c}")
     run.end_stage()
+
+
+def augment_stage(cfg: Config, run: Run, src: Path, split: str) -> None:
+    """Adds IDF_FEATURES to another run's saved features (train_feats/ or test_feats/) in this run's dir, so `retrain`
+    / `rescore` can use them without re-running blocking and the other features (same values build_features gives)."""
+    from multiprocessing import Pool
+    sub = "train_feats" if split == "train" else "test_feats"
+    for name in ("val_truth.parquet", "metrics.json", "reranker.json"):
+        if (src / name).exists():
+            shutil.copy(src / name, run.dir / name)
+    s1 = scan_norm(split, "s1").select("idx", "name_full", "addr", "country_n").collect()
+    pool = scan_norm(split, "pool").select("idx", "name_full", "addr", "country_n").collect()
+    tables = {}
+    for c in sorted(s1["country_n"].drop_nulls().unique().to_list()):
+        ctx = country_context(scan_norm(split, "s1").filter(pl.col("country_n") == c), pool=pool.filter(pl.col("country_n") == c))
+        tables[c] = {k: ctx[k] for k in ("name_idf", "addr_idf", "idf_unseen")}
+        run.log(f"[{c}] idf vocab: names {len(ctx['name_idf']):,} addresses {len(ctx['addr_idf']):,}")
+    out = run.dir / sub
+    out.mkdir(exist_ok=True)
+    parts = sorted((src / sub).glob("part-*.parquet"))
+    run.start_stage("augment")
+    n_w = max(cfg.n_jobs - 2, 1)
+    with Pool(n_w, initializer=_idf_init, initargs=(tables,)) as workers:
+        for i, fp in enumerate(parts):
+            df = pl.read_parquet(fp).drop(IDF_FEATURES, strict=False)
+            j = (df.select("s1_idx", "cand_idx")
+                 .join(s1.rename({"idx": "s1_idx", "name_full": "n1", "addr": "a1"}), on="s1_idx", how="left", maintain_order="left")
+                 .join(pool.drop("country_n").rename({"idx": "cand_idx", "name_full": "n2", "addr": "a2"}), on="cand_idx", how="left", maintain_order="left")
+                 .with_columns(pl.col("n1", "a1", "n2", "a2", "country_n").fill_null("")))
+            step = max(1, -(-j.height // (n_w * 4)))
+            jobs = [tuple(j[c][k:k + step].to_list() for c in ("country_n", "n1", "n2", "a1", "a2")) for k in range(0, j.height, step)]
+            arr = np.vstack(workers.map(_idf_rows, jobs)) if jobs else np.empty((0, 12), dtype=np.float32)
+            df = df.with_columns([pl.Series(k, arr[:, t]) for t, k in enumerate(IDF_FEATURES[:12])]).with_columns(IDF_RANKS)
+            df.with_columns(pl.col(IDF_FEATURES).cast(pl.Float32)).write_parquet(out / fp.name)
+            run.progress((i + 1) / len(parts), f"{i + 1}/{len(parts)} parts")
+    run.end_stage()
+    run.log(f"augmented {len(parts)} parts of {src.name}/{sub} -> {out}")
 
 
 def retrain_stage(cfg: Config, run: Run, src: Path) -> None:
@@ -706,7 +756,7 @@ def predict_stage(cfg: Config, run: Run, model_run_dir: Path) -> None:
 def _spill_scored(feats: pl.DataFrame, model: Model, spill: Path, part_no: int, p_floor: float) -> int:
     """Score one chunk; write its candidate lists (cand-*) and p >= floor pairs (scored-*) to the spill dir."""
     f = feats.select("s1_idx", "cand_idx", "cid", "brank").with_columns(
-        pl.Series("p", model.predict(feats.select(FEATURES).to_numpy()), dtype=pl.Float32))
+        pl.Series("p", model.predict_df(feats), dtype=pl.Float32))
     (f.sort(["s1_idx", "brank"]).group_by("s1_idx", maintain_order=True)
      .agg(pl.col("cid").str.join(",").alias("ids")).write_parquet(spill / f"cand-{part_no:05d}.parquet"))
     f.filter(pl.col("p") >= p_floor).select("s1_idx", "cand_idx", "cid", "p").write_parquet(
@@ -732,6 +782,112 @@ def rescore_stage(cfg: Config, run: Run, model_run_dir: Path, feats_run_dir: Pat
         run.progress((i + 1) / len(parts), f"{i + 1}/{len(parts)} parts")
     run.end_stage()
     decide_stage(cfg, run, spill, dec, n_pairs, labelled_countries(model_run_dir))
+
+
+DENSITY_BANDS = [0.02, 0.2, 0.5, 0.8, 0.95, 1.01]
+
+
+def density_augment(val_u: pl.DataFrame, vt: pl.DataFrame, test_sc: pl.DataFrame, max_f: float = 4.0,
+                    seed: int = 0) -> tuple[pl.DataFrame, dict]:
+    """Validation made as distractor-dense as the test split. The test pool has ~5.8 records per S1 against 4.7 in
+    train with the same ~3.46 true matches, i.e. about twice the unmatched look-alikes, so a threshold tuned on
+    plain val is too loose for test. Per labelled country and p band: f = (test pairs per S1 - val positives per
+    S1) / val negatives per S1; every val negative in the band gets f-1 extra copies (random rounding) with a fresh
+    cand_idx owned by no other S1. Returns (val_u + copies, factors)."""
+    edges = np.array(DENSITY_BANDS)
+    cmap = scan_norm("test", "s1").select(pl.col("idx").alias("s1_idx"), "country_n").collect()
+    n_test = dict(cmap.group_by("country_n").len().iter_rows())
+    t = test_sc.filter(pl.col("p") >= edges[0]).join(cmap, on="s1_idx", how="left")
+    t = t.with_columns(pl.Series("b", np.searchsorted(edges, t["p"].to_numpy(), side="right") - 1))
+    t_cnt = {(c, b): n for c, b, n in t.group_by("country_n", "b").len().iter_rows()}
+    v = val_u.join(vt.select("s1_idx", "country_n"), on="s1_idx", how="inner").filter(pl.col("p") >= edges[0])
+    v = v.with_columns(pl.Series("b", np.searchsorted(edges, v["p"].to_numpy(), side="right") - 1))
+    n_val = dict(vt.group_by("country_n").len().iter_rows())
+    rng = np.random.default_rng(seed)
+    factors, extra = {}, []
+    for c in sorted(n_val):
+        for b in range(len(edges) - 1):
+            vb = v.filter((pl.col("country_n") == c) & (pl.col("b") == b))
+            pos = vb["label"].sum() / n_val[c]
+            neg_rows = vb.filter(pl.col("label") == 0)
+            neg = neg_rows.height / n_val[c]
+            tr = t_cnt.get((c, b), 0) / max(n_test.get(c, 1), 1)
+            f = 1.0 if neg <= 0 else float(np.clip((tr - pos) / neg, 1.0, max_f))
+            factors[f"{c}:{edges[b]:.2f}-{min(edges[b + 1], 1.0):.2f}"] = round(f, 3)
+            if f > 1.0 and neg_rows.height:
+                k = np.floor(f - 1.0) + (rng.random(neg_rows.height) < (f - 1.0 - np.floor(f - 1.0)))
+                rep = (neg_rows.select("s1_idx", "label", "p").with_columns(pl.Series("k", k.astype(np.int64)))
+                       .filter(pl.col("k") > 0).with_columns(pl.int_ranges(0, pl.col("k")).alias("j")).explode("j"))
+                extra.append(rep.select("s1_idx", "label", "p"))
+    if not extra:
+        return val_u, factors
+    ex = pl.concat(extra).with_row_index("r").select(
+        "s1_idx", (-(pl.col("r").cast(pl.Int64) + 1)).alias("cand_idx"), pl.col("label").cast(val_u["label"].dtype),
+        pl.col("p").cast(val_u["p"].dtype))
+    return pl.concat([val_u.select("s1_idx", "cand_idx", "label", "p"), ex.select("s1_idx", "cand_idx", "label", "p")]), factors
+
+
+def redecide_stage(cfg: Config, run: Run, src: Path) -> None:
+    """Re-tune a cross-encoder run's decision on distractor-density-matched validation (density_augment), then write
+    and validate test output from its pred/ scores. Needs src/val_scored_ce.parquet (ce-apply saves it)."""
+    m = json.loads((src / "metrics.json").read_text())
+    s1run = RUNS_DIR / m["stage1_run"] if (RUNS_DIR / m.get("stage1_run", "")).is_dir() else src
+    vt = pl.read_parquet(s1run / "val_truth.parquet")
+    val_u = pl.read_parquet(src / "val_scored_ce.parquet")
+    spill = run.dir / "pred"
+    shutil.rmtree(spill, ignore_errors=True)
+    shutil.copytree(src / "pred", spill)
+    test_sc = pl.read_parquet(spill / "scored-*.parquet", columns=["s1_idx", "cand_idx", "p"])
+    aug, factors = density_augment(val_u, vt, test_sc, seed=cfg.seed)
+    tvc = vt.select("s1_idx", "n_true")
+    cur = {"mode": m["decision_mode"], "param": m["decision_param"], "excl": m["decision_excl"]}
+    f_cur_val = eval_selection(apply_decision(val_u, cur, cfg.p_floor), tvc)["f05"]
+    f_cur_aug = eval_selection(apply_decision(aug, cur, cfg.p_floor), tvc)["f05"]
+    run.log(f"density factors {factors}")
+    run.log(f"val rows {val_u.height:,} -> {aug.height:,}; current {cur['mode']}:{cur['param']} excl={cur['excl']} "
+            f"val {f_cur_val:.5f} dense {f_cur_aug:.5f}")
+    best = max(tune_decision(aug, tvc, cfg.p_floor, run).values(), key=lambda d: d["f05"])
+    dec = {"mode": best["mode"], "param": best["param"], "excl": best["excl"]}
+    f_new_val = eval_selection(apply_decision(val_u, dec, cfg.p_floor), tvc)["f05"]
+    run.log(f"dense-tuned {dec['mode']}:{dec['param']} excl={dec['excl']} dense {best['f05']:.5f} "
+            f"(+{best['f05'] - f_cur_aug:.5f}) plain val {f_new_val:.5f}")
+    run.set_metrics(val_f05=round(f_new_val, 5), val_f05_dense=round(best["f05"], 5), val_f05_dense_before=round(f_cur_aug, 5),
+                    val_f05_before=round(f_cur_val, 5), density_factors=factors, decision_mode=dec["mode"],
+                    decision_param=dec["param"], decision_excl=dec["excl"], redecide_from=src.name,
+                    stage1_run=m.get("stage1_run"))
+    decide_stage(cfg, run, spill, dec, labelled=labelled_countries(s1run))
+
+
+def mix_stage(cfg: Config, run: Run, labelled_src: Path, unlabelled_src: Path) -> None:
+    """Per-country model choice. Blocking is per country, so no candidate crosses countries and each country's rows
+    can come from a different model: countries with validation labels from labelled_src (best validation), countries
+    without labels (open set, e.g. France) from unlabelled_src (best unseen-country proxy: train one labelled country,
+    score the other). Both runs must share the candidate set."""
+    m = json.loads((labelled_src / "metrics.json").read_text())
+    s1run = RUNS_DIR / m["stage1_run"] if (RUNS_DIR / m.get("stage1_run", "")).is_dir() else labelled_src
+    labelled = labelled_countries(s1run) or set()
+    s1 = (pl.read_parquet(CACHE_DIR / "raw_test_s1.parquet", columns=["entity_id", "country"])
+          .select(pl.col("entity_id").alias("source1_entity_id"), pl.col("country").str.strip_chars().str.to_lowercase().alias("c")))
+    rd = lambda d: pl.read_csv(d / "output" / "matching_results.tsv", separator="	", quote_char=None, infer_schema=False)  # noqa: E731
+    a, b = rd(labelled_src), rd(unlabelled_src).rename({"matched_entity_ids": "u"})
+    out = (a.join(s1, on="source1_entity_id", how="left", maintain_order="left").join(b, on="source1_entity_id", how="left", maintain_order="left")
+           .select("source1_entity_id", pl.when(pl.col("c").is_in(sorted(labelled))).then(pl.col("matched_entity_ids"))
+                   .otherwise(pl.col("u")).fill_null("").alias("matched_entity_ids")))
+    assert out.height == a.height
+    out_dir = run.dir / "output"
+    out_dir.mkdir(exist_ok=True)
+    out.write_csv(out_dir / "matching_results.tsv", separator="	", quote_style="never")
+    shutil.copy(labelled_src / "output" / "candidate_pairs.tsv", out_dir / "candidate_pairs.tsv")
+    for fn in ("matching_results.tsv", "candidate_pairs.tsv"):
+        shutil.copy(out_dir / fn, OUTPUT_DIR / fn)
+    unl = sorted(set(s1["c"].unique().to_list()) - labelled)
+    run.log(f"mix: labelled {sorted(labelled)} from {labelled_src.name}; unlabelled {unl} from {unlabelled_src.name}")
+    r = subprocess.run([sys.executable, str(VALIDATOR), "--matching", str(OUTPUT_DIR / "matching_results.tsv"),
+                        "--candidate", str(OUTPUT_DIR / "__skip__.tsv"), "--test-dir", str(ROOT / "student_resource" / "dataset" / "test")],
+                       capture_output=True, text=True, encoding="utf-8", errors="replace", env={**os.environ, "PYTHONIOENCODING": "utf-8"})
+    run.log(f"metric validator matching_results.tsv exit={r.returncode}")
+    run.set_metrics(mix_labelled=labelled_src.name, mix_unlabelled=unlabelled_src.name, validator_pass=r.returncode == 0,
+                    val_f05=m.get("val_f05"))
 
 
 def labelled_countries(run_dir: Path) -> set[str] | None:
@@ -855,7 +1011,7 @@ def main() -> None:
     for stream in (sys.stdout, sys.stderr):  # Windows console is cp1252: never crash a run on a log line
         stream.reconfigure(errors="backslashreplace")
     ap = argparse.ArgumentParser()
-    ap.add_argument("cmd", choices=["prep", "train", "predict", "all", "submit", "lb", "stage2", "decide", "rescore", "ce-train", "ce-apply", "retrain"])
+    ap.add_argument("cmd", choices=["prep", "train", "predict", "all", "submit", "lb", "stage2", "decide", "rescore", "ce-train", "ce-apply", "retrain", "augment", "redecide", "mix"])
     ap.add_argument("args", nargs="*")
     ap.add_argument("--sample", type=float, default=1.0)
     ap.add_argument("--name", default=None)
@@ -893,6 +1049,11 @@ def main() -> None:
     ap.add_argument("--no-comp", action="store_true", help="tune the decision on val S1 only (no competitor S1)")
     ap.add_argument("--depth", type=int, default=None, help="override xgb max_depth")
     ap.add_argument("--lr", type=float, default=None, help="override xgb learning rate")
+    ap.add_argument("--split", choices=["train", "test"], default="train", help="augment: which saved features")
+    ap.add_argument("--drop-feats", default="", help="train/retrain: comma list of FEATURES to leave out")
+    ap.add_argument("--crowd-w", type=float, default=None, help="train/retrain: weight of rows with >= 15 candidates")
+    ap.add_argument("--unlabelled-from", default=None, help="mix: run whose rows are used for countries without labels")
+    ap.add_argument("--monotone", action="store_true", help="train/retrain: monotone constraints (features.MONO_*)")
     a = ap.parse_args()
 
     if a.cmd == "lb":
@@ -915,7 +1076,8 @@ def main() -> None:
         cfg.xgb_lr = a.lr
     cfg.extra.update(train_max_s1=a.train_max_s1, val_max_s1=a.val_max_s1, max_df=a.max_df, threshold_override=a.threshold,
                      prep_workers=a.prep_workers, k_name=a.k_name, k_addr=a.k_addr, use_rr=not a.no_rr, use_comp=not a.no_comp, save_test_feats=a.save_test_feats, extra_parts=a.extra_parts, reranker_from=a.reranker_from, unlabelled_shape=not a.no_unlabelled_shape,
-                     rr_keep=a.rr_keep, rr_wide=tuple(int(x) for x in a.rr_wide.split(",")), rr_fit_s1=a.rr_fit_s1, rr_tau=a.rr_tau, rr_min=a.rr_min)
+                     rr_keep=a.rr_keep, rr_wide=tuple(int(x) for x in a.rr_wide.split(",")), rr_fit_s1=a.rr_fit_s1, rr_tau=a.rr_tau, rr_min=a.rr_min,
+                     drop_feats=[x for x in a.drop_feats.split(",") if x], crowd_w=a.crowd_w, monotone=a.monotone)
     run = Run(cfg.run_name, cfg.to_dict())
     try:
         with HwMonitor(run.dir / "hw.csv"):
@@ -933,6 +1095,12 @@ def main() -> None:
                 predict_stage(cfg, run, run.dir)
             if a.cmd == "retrain":
                 retrain_stage(cfg, run, RUNS_DIR / a.run)
+            if a.cmd == "augment":
+                augment_stage(cfg, run, RUNS_DIR / a.run, a.split)
+            if a.cmd == "redecide":
+                redecide_stage(cfg, run, RUNS_DIR / a.run)
+            if a.cmd == "mix":
+                mix_stage(cfg, run, RUNS_DIR / a.run, RUNS_DIR / a.unlabelled_from)
             if a.cmd in ("ce-train", "ce-apply"):
                 import cross_encoder as ce
                 me = sys.modules[__name__]

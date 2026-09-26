@@ -55,8 +55,27 @@ Step 3 runs the official validator (`student_resource/utils/validate_submission.
 file and a streamed format check on the candidate file (the official validator's candidate check needs
 more RAM than 16 GB machines have for this candidate volume).
 
+```
+# 5. decision matched to the test split's distractor density
+python $SRC/pipeline.py redecide --run <final_ce_run_id> --name final_dense
+# 6. per-country model choice: labelled countries from the best-validated model, countries without labels (France)
+#    from the model that transfers best to an unseen country (v10s: `retrain --drop-feats <address IDF features>`)
+python $SRC/pipeline.py mix --run <v10 dense run> --unlabelled-from <v10s dense run> --name final_mix
+```
+Final file of 2026-09-27 (reproduced byte-for-byte by step 6): US/India rows from v10 + CE + `redecide`, France rows
+from v10s + CE + `redecide`. v10s = `retrain --drop-feats n_rep_idf,n_miss_idf,a_idf_jacc,a_idf_miss1,a_idf_miss2,a_rep,a_rep_idf,a_miss_idf,a_idf_rank`.
+The test pool has ~5.8 Source 2/3 records per S1 against 4.7 in train with the same ~3.46 true matches, i.e.
+about twice the unmatched look-alikes. `redecide` copies validation negatives per score band until the band
+counts per S1 match the test scores, re-tunes the decision on that, and writes/validates the output again.
+
+Features: `train`/`predict` compute all `FEATURES` in `features.py`, including the v10 country-IDF token
+agreement features. Fast path used during development, identical values: `augment --run <run> --split train`
+(or `--split test` on a `--save-test-feats` predict run) adds the v10 columns to saved features, then
+`retrain --run <augmented run>` and `rescore --run <retrain run> --feats-run <augmented test run>`.
+
 Other commands: `decide --run <id>` (re-apply a decision to saved test scores), `rescore --run <model_run>
 --feats-run <run with --save-test-feats>` (score saved test features with another model),
+`retrain --crowd-w 3` (3x weight on training rows of S1 with >= 15 candidates), `--drop-feats a,b` (ablation),
 `submit --run <test_run_id> --team <name>` (build the submission zip).
 
 ## Outputs

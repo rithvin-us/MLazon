@@ -35,6 +35,31 @@ FEATURES = [
     "anc_nc_mean", "anc_nc_max", "anc_ad_mean", "anc_ad_max", "hn_vote", "n_anc_hn",
     "twin_better", "n_hn_eq_s1", "ad_tset_rank", "hn_sim_rank", "ncc_ratio_rank", "ad_core_rank",
 ]
+# v10: token agreement weighted by the country's own IDF (from its S1 population). Where names and streets are
+# built from a small vocabulary (generic words, a handful of cities), plain fuzzy ratios stay high for different
+# businesses; IDF weighting makes the distinctive words carry the decision in any country. Near-identical
+# leftovers (typos, truncations) count as shared. *_rep: exactly one word replaced on each side.
+IDF_FEATURES = ["n_idf_jacc", "n_idf_miss1", "n_idf_miss2", "n_rep", "n_rep_idf", "n_miss_idf",
+                "a_idf_jacc", "a_idf_miss1", "a_idf_miss2", "a_rep", "a_rep_idf", "a_miss_idf",
+                "n_idf_rank", "a_idf_rank"]
+FEATURES = FEATURES + IDF_FEATURES
+# monotone direction of p in each feature, all else equal (optional `--monotone` training): similarities up,
+# ranks / gaps / conflicts down, counts and flags free. Constrained trees extrapolate more sanely to a country the
+# model never saw (open-set countries).
+MONO_UP = ["bscore", "bscore_norm", "bname", "baddr", "bname_norm", "baddr_norm", "rr",
+           "nf_ratio", "nf_tset", "nf_tsort", "nf_partial", "nf_jw", "nc_ratio", "nc_tset", "nc_jw",
+           "ad_ratio", "ad_tset", "ad_partial", "pc_eq", "num_jacc", "ncc_ratio", "ncc_partial", "nsk_ratio", "nsk_tset",
+           "hn_eq", "hn_sim", "ad_core_tset", "legal_eq", "anc_nc_mean", "anc_nc_max", "anc_ad_mean", "anc_ad_max",
+           "n_idf_jacc", "a_idf_jacc"]
+MONO_DOWN = ["brank", "brank_name", "brank_addr", "rr_rank", "nf_tset_rank", "ad_tset_rank", "hn_sim_rank",
+             "ncc_ratio_rank", "ad_core_rank", "nc_tset_gap", "ad_tset_gap", "bscore_gap_top", "legal_conflict",
+             "twin_better", "c_oov_frac", "n_idf_miss1", "n_idf_miss2", "a_idf_miss1", "a_idf_miss2", "n_idf_rank", "a_idf_rank"]
+
+
+def monotone(features: list[str]) -> tuple:
+    return tuple(1 if f in MONO_UP else -1 if f in MONO_DOWN else 0 for f in features)
+
+
 N_ANCHORS = 3
 # re-ranker inputs: blocking scores + three cheap fuzzy sims (see rerank_sims)
 RR_FEATURES = ["bscore", "bscore_norm", "bname", "baddr", "bname_norm", "baddr_norm", "brank", "brank_name",
@@ -70,18 +95,106 @@ def add_name_counts(frames: list[pl.DataFrame], pool: pl.DataFrame, s1_all: pl.L
             .with_columns(pl.col(CNT_COLS).fill_null(0.0)) for f in frames]
 
 
-def country_context(s1_all: pl.LazyFrame, stop_frac: float = 0.002) -> dict:
+def country_context(s1_all: pl.LazyFrame, stop_frac: float = 0.002, pool: pl.DataFrame | None = None) -> dict:
     """Per-country vocabularies from the (unlabelled) S1 population of the split:
     addr_stop  address tokens in >= stop_frac of S1 addresses (city / state / 'rd'), digits never included
-    name_vocab every name_core token seen in any S1 name (pool names outside it were renamed or mangled)."""
-    s = s1_all.select(pl.col("name_core").fill_null(""), pl.col("addr").fill_null("")).collect()
+    name_vocab every name_core token seen in any S1 name (pool names outside it were renamed or mangled)
+    name_idf / addr_idf  token -> ln(N / document frequency) over the S1 population plus the country's pool when given
+               (address: no digit tokens). With the pool, variants used only by the copies (a French departement where
+               S1 names the region) get a low weight instead of looking like a rare, distinctive word."""
+    s = s1_all.select(pl.col("name_core").fill_null(""), pl.col("addr").fill_null(""),
+                      pl.col("name_full").fill_null("")).collect()
     n = max(s.height, 1)
     adf = (s.select(pl.col("addr").str.split(" ").list.unique().alias("t")).explode("t")
            .filter(pl.col("t").str.len_chars() > 0).group_by("t").len())
     stop = adf.filter((pl.col("len") >= max(20, stop_frac * n)) & ~pl.col("t").str.contains(r"\d"))["t"]
     vocab = (s.select(pl.col("name_core").str.split(" ").alias("t")).explode("t")
              .filter(pl.col("t").str.len_chars() > 0)["t"].unique())
-    return {"addr_stop": stop, "name_vocab": vocab}
+    nm, ad = s["name_full"], s["addr"]
+    if pool is not None:
+        nm = pl.concat([nm, pool["name_full"].fill_null("")])
+        ad = pl.concat([ad, pool["addr"].fill_null("")])
+    return {"addr_stop": stop, "name_vocab": vocab, "name_idf": _idf_table(nm, nm.len(), False),
+            "addr_idf": _idf_table(ad, ad.len(), True), "idf_unseen": float(np.log(nm.len()))}
+
+
+def _idf_table(col: pl.Series, n: int, drop_digits: bool) -> dict:
+    t = col.str.split(" ").list.unique().explode().drop_nulls()
+    t = t.filter(t.str.len_chars() > 0)
+    if drop_digits:
+        t = t.filter(~t.str.contains(r"\d"))
+    d = t.value_counts()
+    return dict(zip(d[d.columns[0]].to_list(), np.log(n / d["count"].to_numpy()).tolist()))
+
+
+def _idf_agree(a: str, b: str, idf: dict, unseen: float, drop_digits: bool) -> tuple:
+    """(jacc, miss1, miss2, rep, rep_idf, miss_idf) of two token strings, IDF-weighted; NaN when one side is empty."""
+    ta = {t for t in a.split() if not (drop_digits and any(ch.isdigit() for ch in t))}
+    tb = {t for t in b.split() if not (drop_digits and any(ch.isdigit() for ch in t))}
+    if not ta or not tb:
+        return _NAN6
+    w = idf.get
+    shared = ta & tb
+    ra, rb = ta - shared, tb - shared
+    ws = sum(w(t, unseen) for t in shared)
+    # leftovers soft-match best-first (deterministic): typo (ratio >= 80) or truncation (one a prefix of the other)
+    ma, mb = set(), set()
+    if ra and rb:
+        for s, x, y in sorted(((fuzz.ratio(x, y), x, y) for x in ra for y in rb), reverse=True):
+            if x in ma or y in mb:
+                continue
+            if s >= 80 or (min(len(x), len(y)) >= 3 and (x.startswith(y) or y.startswith(x))):
+                ma.add(x)
+                mb.add(y)
+                ws += min(w(x, unseen), w(y, unseen)) * max(s, 80.0) / 100.0
+    ua = sorted(ra - ma)
+    ub = sorted(rb - mb)
+    wua, wub = sum(w(t, unseen) for t in ua), sum(w(t, unseen) for t in ub)
+    wa, wb = sum(w(t, unseen) for t in ta), sum(w(t, unseen) for t in tb)
+    rep = len(ua) == 1 and len(ub) == 1
+    return (ws / max(ws + wua + wub, 1e-9), wua / max(wa, 1e-9), wub / max(wb, 1e-9), float(rep),
+            min(w(ua[0], unseen), w(ub[0], unseen)) if rep else -1.0,
+            max([w(t, unseen) for t in ua + ub], default=0.0))
+
+
+_NAN6 = (float("nan"),) * 6
+
+
+def idf_features(nf1: list[str], nf2: list[str], ad1: list[str], ad2: list[str], ctx: dict | None) -> dict:
+    """IDF_FEATURES except the within-S1 ranks, as float32 arrays. ctx=None -> all NaN."""
+    n = len(nf1)
+    if not ctx or "name_idf" not in ctx:
+        return {k: np.full(n, np.nan, dtype=np.float32) for k in IDF_FEATURES[:12]}
+    ni, ai, un = ctx["name_idf"], ctx["addr_idf"], ctx["idf_unseen"]
+    nm = np.array([_idf_agree(x, y, ni, un, False) for x, y in zip(nf1, nf2)], dtype=np.float32).reshape(n, 6)
+    ad = np.array([_idf_agree(x, y, ai, un, True) for x, y in zip(ad1, ad2)], dtype=np.float32).reshape(n, 6)
+    return {**{k: nm[:, i] for i, k in enumerate(IDF_FEATURES[:6])}, **{k: ad[:, i] for i, k in enumerate(IDF_FEATURES[6:12])}}
+
+
+_W: dict = {}
+
+
+def _idf_init(tables: dict) -> None:
+    """Worker initializer for augment: country -> {name_idf, addr_idf, idf_unseen}."""
+    _W.update(tables)
+
+
+def _idf_rows(job: tuple) -> np.ndarray:
+    """job = (countries, nf1, nf2, ad1, ad2) lists -> (n, 12) float32 in IDF_FEATURES[:12] order."""
+    cs, nf1, nf2, ad1, ad2 = job
+    out = np.empty((len(cs), 12), dtype=np.float32)
+    for i, (c, x1, x2, y1, y2) in enumerate(zip(cs, nf1, nf2, ad1, ad2)):
+        t = _W.get(c)
+        if t is None:
+            out[i] = np.nan
+            continue
+        out[i, :6] = _idf_agree(x1, x2, t["name_idf"], t["idf_unseen"], False)
+        out[i, 6:] = _idf_agree(y1, y2, t["addr_idf"], t["idf_unseen"], True)
+    return out
+
+
+IDF_RANKS = [pl.col("n_idf_jacc").fill_nan(None).rank("average", descending=True).over("s1_idx").alias("n_idf_rank"),
+             pl.col("a_idf_jacc").fill_nan(None).rank("average", descending=True).over("s1_idx").alias("a_idf_rank")]
 
 
 def rerank_sims(pairs: pl.DataFrame, s1: pl.DataFrame, pool: pl.DataFrame, workers: int = -1) -> pl.DataFrame:
@@ -160,6 +273,7 @@ def build_features(pairs: pl.DataFrame, s1: pl.DataFrame, pool: pl.DataFrame, wo
     f["num_jacc"], f["num_both"] = num_j, num_b
     hn1, hn2 = a["addr_1"].str.extract(_HOUSE_NO, 1), a["addr_2"].str.extract(_HOUSE_NO, 1)
     f["hn_sim"] = _pair_scores(hn1.fill_null("").to_list(), hn2.fill_null("").to_list(), fuzz.ratio, workers)
+    f.update(idf_features(nf1, nf2, ad1, ad2, ctx))
     stop = ctx["addr_stop"] if ctx else pl.Series("t", [], dtype=pl.String)
     vocab = ctx["name_vocab"] if ctx else None
     core = lambda c: (a[c].fill_null("").str.split(" ")  # noqa: E731
@@ -228,6 +342,7 @@ def build_features(pairs: pl.DataFrame, s1: pl.DataFrame, pool: pl.DataFrame, wo
         # a near-identical sibling has the exact house number while this one has a different one
         (((pl.col("hn_eq") == 1) & (pl.col("nc_tset") >= 90)).any().over("s1_idx")
          & (pl.col("hn_eq") == 0) & (pl.col("hn_both") == 1)).cast(pl.Float32).alias("twin_better"),
+        *IDF_RANKS,
     )
     feats = feats.join(_anchor_features(a, hn2, workers), on=["s1_idx", "cand_idx"], how="left", maintain_order="left")
     return feats.with_columns(pl.col(FEATURES).cast(pl.Float32))

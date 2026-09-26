@@ -158,6 +158,7 @@ def apply_ce(pp, cfg, run, src_run: Path, pred_run: Path, ce_dir: Path) -> None:
         comp2 = _restack(comp, cb, stacker.predict(xgb.DMatrix(_x(cb))))
         base_u, new_u = pl.concat([va, lab0(comp)]), pl.concat([va2, lab0(comp2)])
     tvc = vt.select("s1_idx", "n_true")
+    new_u.write_parquet(run.dir / "val_scored_ce.parquet")  # stacked val (+ competitor) scores, for `redecide`
     b0 = max(pp.tune_decision(base_u, tvc, cfg.p_floor, run).values(), key=lambda d: d["f05"])
     res = pp.tune_decision(new_u, tvc, cfg.p_floor, run)
     b1 = max(res.values(), key=lambda d: d["f05"])

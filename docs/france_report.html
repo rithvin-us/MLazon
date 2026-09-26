@@ -1,0 +1,392 @@
+<title>France Test-Set Diagnosis</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;600;700;800&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+:root{
+  --bg:#f5f6f8; --surface:#ffffff; --ink:#1b2230; --muted:#5b6576; --line:#dce1e8; --soft:#eef1f5;
+  --accent:#2c5a8c; --fr:#c2412d; --in:#b07d1c; --us:#4a6fa5;
+  --good:#2f7d4f; --warn:#a8650a; --bad:#b3372a;
+  --sans:"Public Sans",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,"Cascadia Mono",Consolas,monospace;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    color-scheme:dark;
+    --bg:#11151c; --surface:#181d26; --ink:#e3e7ee; --muted:#9aa4b5; --line:#2b323e; --soft:#1f2530;
+    --accent:#88b0e2; --fr:#e57561; --in:#d8a94c; --us:#83a4d8;
+    --good:#6cc08e; --warn:#e0a44a; --bad:#ec7b6d;
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme:dark;
+  --bg:#11151c; --surface:#181d26; --ink:#e3e7ee; --muted:#9aa4b5; --line:#2b323e; --soft:#1f2530;
+  --accent:#88b0e2; --fr:#e57561; --in:#d8a94c; --us:#83a4d8;
+  --good:#6cc08e; --warn:#e0a44a; --bad:#ec7b6d;
+}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:16px;line-height:1.6;padding-inline:16px;padding-block:32px 64px}
+.wrap{max-width:860px;margin:0 auto;display:flex;flex-direction:column;gap:44px}
+header{display:flex;flex-direction:column;gap:10px}
+.eyebrow{font-family:var(--mono);font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+h1{font-size:clamp(28px,5vw,40px);line-height:1.15;font-weight:800;margin:0;text-wrap:balance}
+h2{font-size:24px;line-height:1.25;font-weight:700;margin:0;text-wrap:balance}
+h3{font-size:17px;font-weight:700;margin:0}
+p{margin:0;max-width:68ch}
+section{display:flex;flex-direction:column;gap:16px}
+.lede{font-size:18px;color:var(--muted);max-width:62ch}
+.flag{display:inline-flex;height:6px;width:54px;border-radius:2px;overflow:hidden}
+.flag i{flex:1}
+.flag i:nth-child(1){background:#2b4c9b}.flag i:nth-child(2){background:#f1f1f1}.flag i:nth-child(3){background:#c8323c}
+.verdict{background:var(--surface);border:1px solid var(--line);border-left:4px solid var(--fr);border-radius:6px;padding:20px 22px;display:flex;flex-direction:column;gap:12px}
+.verdict ul{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:6px}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px}
+.kpi{background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:14px 16px;display:flex;flex-direction:column;gap:2px}
+.kpi b{font-family:var(--mono);font-size:24px;font-weight:500;font-variant-numeric:tabular-nums}
+.kpi span{font-size:13px;color:var(--muted)}
+.tbl{overflow-x:auto;border:1px solid var(--line);border-radius:6px;background:var(--surface)}
+table{border-collapse:collapse;width:100%;font-size:14px;min-width:560px}
+th,td{padding:9px 12px;text-align:left;border-bottom:1px solid var(--line);vertical-align:top}
+tr:last-child td{border-bottom:none}
+th{font-size:12px;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);font-weight:600;background:var(--soft)}
+td.n,th.n{text-align:right;font-family:var(--mono);font-variant-numeric:tabular-nums;white-space:nowrap}
+td.fr{color:var(--fr);font-weight:500}
+.x{font-family:var(--mono);font-size:12px;color:var(--muted)}
+.bars{display:flex;flex-direction:column;gap:18px}
+.bar-group{display:flex;flex-direction:column;gap:5px}
+.bar-title{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;font-size:14px}
+.bar-title em{font-style:normal;color:var(--muted);font-size:13px}
+.bar{display:grid;grid-template-columns:62px 1fr 72px;align-items:center;gap:10px;font-size:13px}
+.bar .lab{color:var(--muted)}
+.bar .track{height:12px;background:var(--soft);border-radius:2px;overflow:hidden}
+.bar .fill{height:100%;border-radius:2px}
+.bar .val{font-family:var(--mono);font-variant-numeric:tabular-nums;text-align:right}
+.f-fr{background:var(--fr)}.f-in{background:var(--in)}.f-us{background:var(--us)}
+.pairs{display:flex;flex-direction:column;gap:12px}
+.pair{background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:14px 16px;display:flex;flex-direction:column;gap:8px}
+.pair .rec{font-family:var(--mono);font-size:13px;line-height:1.5;overflow-wrap:anywhere}
+.pair .rec span{color:var(--muted)}
+.pair .meta{display:flex;gap:8px;flex-wrap:wrap;align-items:center;font-size:13px}
+.chip{font-family:var(--mono);font-size:12px;padding:2px 8px;border-radius:999px;border:1px solid var(--line);background:var(--soft);white-space:nowrap}
+.chip.bad{color:var(--bad);border-color:currentColor;background:transparent}
+.chip.warn{color:var(--warn);border-color:currentColor;background:transparent}
+.chip.good{color:var(--good);border-color:currentColor;background:transparent}
+.two{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px}
+.box{background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:16px 18px;display:flex;flex-direction:column;gap:8px}
+.box ul{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:5px;font-size:15px}
+.fix{background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:18px 20px;display:flex;flex-direction:column;gap:10px}
+.fix-head{display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap}
+.fix-head h3 .id{font-family:var(--mono);color:var(--accent);margin-right:8px}
+.fix dl{display:grid;grid-template-columns:110px 1fr;gap:6px 14px;margin:0;font-size:15px}
+.fix dt{color:var(--muted);font-size:13px;padding-top:2px}
+.fix dd{margin:0}
+.note{font-size:14px;color:var(--muted)}
+code{font-family:var(--mono);font-size:.9em;background:var(--soft);padding:1px 5px;border-radius:3px}
+.exam{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
+.exam .box h3{font-size:15px}
+.exam .box p{font-size:15px}
+footer{font-size:13px;color:var(--muted);border-top:1px solid var(--line);padding-top:16px}
+@media (max-width:520px){.fix dl{grid-template-columns:1fr}.fix dt{padding-top:6px}.bar{grid-template-columns:52px 1fr 60px}}
+</style>
+
+<div class="wrap">
+
+<header>
+  <div class="eyebrow">Amazon ML Challenge 2026 · Business entity resolution · Team Techiva · 26 Sep 2026</div>
+  <h1>France test-set diagnosis</h1>
+  <p class="lede">Why the one country with no answer key scores about 0.92 while the US and India score about 0.986, what exactly is different about it, and the fixes planned for the next submissions.</p>
+  <div class="flag" aria-hidden="true"><i></i><i></i><i></i></div>
+</header>
+
+<section>
+  <div class="verdict">
+    <h3>Verdict</h3>
+    <ul>
+      <li><b>France is the gap.</b> The leaderboard score 0.975411 splits into roughly 0.986 on US/India and <b>about 0.916 on France</b>. France alone costs about 0.0105 of leaderboard score; the whole distance to the top (0.9906) is 0.0152.</li>
+      <li><b>The main problem is crowding.</b> French records are built from a tiny vocabulary: about 15 cities, 15,000 distinct address words (US 109,000, India 302,000) and generic names like <i>Club, Ecole, Amicale + SARL/SAS</i>. Many different businesses look almost identical, in the name <i>and</i> the address at the same time.</li>
+      <li><b>The model never practised on that.</b> It was trained on US/India, where either the name (US) or the address (India) is usually distinctive. On France it is unsure 3–4× more often and over-confident: France needs a threshold of 0.895 where US/India use 0.625.</li>
+      <li><b>Cleaning is not broken.</b> One small gap (French départements) and a few rare formats; none of them explains the gap by itself.</li>
+      <li><b>Fix direction:</b> build a France-like practice test from US/India data so France work can be measured, then retrain with more weight on crowded cases, add street-identity features and clean départements.</li>
+    </ul>
+  </div>
+  <div class="kpis">
+    <div class="kpi"><b>0.975411</b><span>leaderboard, v9_ce</span></div>
+    <div class="kpi"><b>0.98585</b><span>US/India validation F0.5</span></div>
+    <div class="kpi"><b>≈ 0.916</b><span>France, implied from the leaderboard</span></div>
+    <div class="kpi"><b>15.0%</b><span>of test businesses are French</span></div>
+  </div>
+</section>
+
+<section>
+  <h2>1. Why France cannot be scored at home</h2>
+  <p>Think of the competition as a school exam.</p>
+  <div class="exam">
+    <div class="box"><h3>Practice papers, with answers</h3><p>The training data covers only the US and India and comes with the answer key. We hide part of it from the model, let it answer, and check. That check is our 0.986.</p></div>
+    <div class="box"><h3>The real exam, no answers</h3><p>The test data has US, India <b>and France</b>. Amazon keeps the answer key. There is no French practice paper anywhere in the training data.</p></div>
+    <div class="box"><h3>Only a total mark</h3><p>The leaderboard returns one number for the whole paper, never a mark per country. France is 15% of it, and each look costs one of five daily submissions.</p></div>
+  </div>
+  <p>So a France improvement of 0.02 shows up as only 0.003 on the leaderboard, mixed with whatever changed on US/India. The implied France score has an error bar of about ±0.006, because an error of 0.001 on US/India moves it by that much.</p>
+  <p>What we can still do without answers: check that France gets the same number of matches per business as the US and India (it should, the data generator is the same), watch how often the model is unsure, read small samples by eye, and build a France-like stand-in test from labelled US/India data (fix F1).</p>
+</section>
+
+<section>
+  <h2>2. What the French data looks like</h2>
+  <div class="tbl"><table>
+    <thead><tr><th>Test split</th><th class="n">France</th><th class="n">India</th><th class="n">US</th></tr></thead>
+    <tbody>
+      <tr><td>Source 1 businesses (S1)</td><td class="n fr">259,452</td><td class="n">809,986</td><td class="n">663,106</td></tr>
+      <tr><td>Source 2 records</td><td class="n">703,378</td><td class="n">2,312,565</td><td class="n">1,871,330</td></tr>
+      <tr><td>Source 3 records</td><td class="n">731,615</td><td class="n">2,405,000</td><td class="n">1,945,701</td></tr>
+      <tr><td>S2 + S3 records per S1</td><td class="n">5.53</td><td class="n">5.82</td><td class="n">5.76</td></tr>
+      <tr><td>Name words per S1</td><td class="n">3.14</td><td class="n">3.74</td><td class="n">3.45</td></tr>
+      <tr><td>Address words per S1</td><td class="n">6.71</td><td class="n">12.03</td><td class="n">5.91</td></tr>
+      <tr><td>S1 with a postcode</td><td class="n">0.4%</td><td class="n">0.2%</td><td class="n">11%</td></tr>
+      <tr><td>S1 names with a legal form</td><td class="n">70% <span class="x">SARL SAS EURL SA SCI</span></td><td class="n">80% <span class="x">Pvt Ltd</span></td><td class="n">53% <span class="x">LLC Inc</span></td></tr>
+    </tbody>
+  </table></div>
+  <div class="two">
+    <div class="box">
+      <h3>Geography: 3 regions, about 15 cities</h3>
+      <ul>
+        <li><b>Hauts-de-France:</b> Lille, Tourcoing, Dunkerque, Roubaix, Calais</li>
+        <li><b>Nouvelle-Aquitaine:</b> Bordeaux, Pessac, Mérignac, La Teste-de-Buch, Lège-Cap-Ferret</li>
+        <li><b>Pays de la Loire:</b> Nantes, Saint-Nazaire, Pornic, Saint-Herblain, La Baule-Escoublac</li>
+      </ul>
+      <p class="note">Bordeaux alone appears in about 43,600 S1 addresses, Nantes 37,600, Lille 34,900.</p>
+    </div>
+    <div class="box">
+      <h3>Names: generic words plus a legal form</h3>
+      <ul>
+        <li>Legal forms: SARL 73k, SAS 63k, EURL 17k, SA 13k, SCI 8k</li>
+        <li>Generic words: club 23k, ecole 16k, amicale 14k, comite 14k, maison 11k, centre 11k, union 9k, sportive 8k</li>
+        <li>Typical: <i>Communale Sportive SAS</i>, <i>Babouk Club EURL</i>, <i>XY Loisirs SARL</i>, <i>EHPAD de la Marie</i></li>
+      </ul>
+    </div>
+  </div>
+  <div class="box">
+    <h3>How the copies are made (inferred from samples and counts)</h3>
+    <p>Each French business has on average 3.36 copies in Source 2/3, exactly as in the US and India. The noise applied to copies is the same family as in training, with a few French variants:</p>
+    <ul>
+      <li>Case and accents: <code>BABOUK CLUB EURL</code>, <code>Communale Spôrtive</code>, <code>Çlub</code>; 24% of French copies contain non-ASCII letters.</li>
+      <li>Abbreviations: <code>R.</code> / <code>R</code> for rue, <code>AV</code> for avenue, <code>E.U.R.L.</code>, <code>SASU</code>, <code>Établissements</code> for Ets.</li>
+      <li>Look-alike digits: <code>Nationa1e</code>, <code>mas0n</code>.</li>
+      <li>Extra or dropped words: <code>Groupe</code>, <code>&amp; Fils</code>, <code>France</code>, dropped legal form.</li>
+      <li>Aliases: handles (<code>@nantesecole</code>), domains (<code>Ehpadmarie.Com</code>), trading-as (<code>Arczephx t/a Communale Sportive SAS</code>).</li>
+      <li>Address: parts reordered or number dropped (15% do not start with the house number), <code>No. 13 Rue …</code> (5.7%), <code>12 bis</code> / <code>ter</code> (4.0%, French only), address dropped (3%), <b>département instead of region</b> (32%).</li>
+    </ul>
+  </div>
+</section>
+
+<section>
+  <h2>3. The main problem compared with the US and India</h2>
+  <p>India already has crowded names: half its businesses share a core name with another business. But Indian addresses are long and varied (12 words, 302,000 distinct words), so the address still tells them apart. The US has distinctive names. <b>France is the only country where both name and address are crowded at once</b>, and the training data never contains that combination.</p>
+  <div class="bars" role="img" aria-label="Bar comparisons of crowding measures for France, India and US">
+    <div class="bar-group">
+      <div class="bar-title"><h3>Distinct address words in S1</h3><em>fewer = more businesses share streets</em></div>
+      <div class="bar"><span class="lab">France</span><div class="track"><div class="fill f-fr" style="width:5%"></div></div><span class="val">15,025</span></div>
+      <div class="bar"><span class="lab">India</span><div class="track"><div class="fill f-in" style="width:100%"></div></div><span class="val">302,295</span></div>
+      <div class="bar"><span class="lab">US</span><div class="track"><div class="fill f-us" style="width:36%"></div></div><span class="val">108,807</span></div>
+    </div>
+    <div class="bar-group">
+      <div class="bar-title"><h3>Candidates kept per business</h3><em>more look-alikes survive blocking</em></div>
+      <div class="bar"><span class="lab">France</span><div class="track"><div class="fill f-fr" style="width:100%"></div></div><span class="val">21.6</span></div>
+      <div class="bar"><span class="lab">India</span><div class="track"><div class="fill f-in" style="width:49%"></div></div><span class="val">10.5</span></div>
+      <div class="bar"><span class="lab">US</span><div class="track"><div class="fill f-us" style="width:37%"></div></div><span class="val">8.1</span></div>
+    </div>
+    <div class="bar-group">
+      <div class="bar-title"><h3>Same name + same house number, different street, per business</h3><em>63× the US rate</em></div>
+      <div class="bar"><span class="lab">France</span><div class="track"><div class="fill f-fr" style="width:100%"></div></div><span class="val">0.69</span></div>
+      <div class="bar"><span class="lab">India</span><div class="track"><div class="fill f-in" style="width:22%"></div></div><span class="val">0.15</span></div>
+      <div class="bar"><span class="lab">US</span><div class="track"><div class="fill f-us" style="width:1.6%"></div></div><span class="val">0.011</span></div>
+    </div>
+    <div class="bar-group">
+      <div class="bar-title"><h3>Uncertain pairs (0.2 ≤ p &lt; 0.8) per business</h3><em>how often the model hesitates</em></div>
+      <div class="bar"><span class="lab">France</span><div class="track"><div class="fill f-fr" style="width:100%"></div></div><span class="val">0.50</span></div>
+      <div class="bar"><span class="lab">India</span><div class="track"><div class="fill f-in" style="width:26%"></div></div><span class="val">0.13</span></div>
+      <div class="bar"><span class="lab">US</span><div class="track"><div class="fill f-us" style="width:34%"></div></div><span class="val">0.17</span></div>
+    </div>
+  </div>
+  <div class="tbl"><table>
+    <thead><tr><th>Measure</th><th class="n">France</th><th class="n">India</th><th class="n">US</th><th>What it means</th></tr></thead>
+    <tbody>
+      <tr><td>Top-20 address words, share of all address words</td><td class="n fr">52%</td><td class="n">27%</td><td class="n">29%</td><td>Half of every French address is the same 20 words.</td></tr>
+      <tr><td>Top-100 name words, share of all name words</td><td class="n fr">71%</td><td class="n">66%</td><td class="n">40%</td><td>Names are generic, as in India.</td></tr>
+      <tr><td>S1 sharing its core name with another S1</td><td class="n fr">51%</td><td class="n">53%</td><td class="n">37%</td><td>Name alone rarely identifies a business.</td></tr>
+      <tr><td>Most S1 with one identical name</td><td class="n fr">516</td><td class="n">183</td><td class="n">262</td><td>Some French names repeat hundreds of times.</td></tr>
+      <tr><td>Same name + number, street only partly matching, per S1</td><td class="n fr">0.36</td><td class="n">0.11</td><td class="n">0.08</td><td>The hardest cases; 23% assigned, 56% go to another S1.</td></tr>
+      <tr><td>Legal form differs, among uncertain pairs</td><td class="n fr">4.9%</td><td class="n">0.2%</td><td class="n">0.2%</td><td>SARL vs SAS swaps; training has almost none, so the model cannot know whether a swap means "different business".</td></tr>
+      <tr><td>Threshold that gives 3.36 matches per S1</td><td class="n fr">0.895</td><td class="n">0.625</td><td class="n">0.625</td><td>Over-confident: many French non-matches score between 0.625 and 0.895.</td></tr>
+      <tr><td>Share of all candidate pairs</td><td class="n fr">29%</td><td class="n">44%</td><td class="n">28%</td><td>France is 15% of businesses but 29% of the candidate file.</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section>
+  <h2>4. Look-alikes the model struggles with</h2>
+  <p>Real pairs from the test set with the final score <code>p</code> from the submitted model. S1 on top, candidate below.</p>
+  <div class="pairs">
+    <div class="pair">
+      <div class="rec">Mur Musique SARL <span>|</span> 64 Avenue de Verdun, Bordeaux, Nouvelle-Aquitaine<br>Mur Club SARL <span>|</span> 64 AVENUE DE VERDN, BORDEAUX</div>
+      <div class="meta"><span class="chip warn">p 0.647</span><span>One generic word swapped (Musique → Club), same address. Typo-copy or a different business?</span></div>
+    </div>
+    <div class="pair">
+      <div class="rec">Trois Maison SAS <span>|</span> 149 Rue Stéhélin, Bordeaux<br>Trois Club SAS <span>|</span> 149 R. STEELIN, BORDEAUX, Gironde</div>
+      <div class="meta"><span class="chip warn">p 0.687</span><span>Word swap plus a street typo plus département instead of region.</span></div>
+    </div>
+    <div class="pair">
+      <div class="rec">Nationale Musique SARL <span>|</span> 36A63 RUE de Maubeuge, Lille, Hauts-de-France<br>Nationa1e Musique SAS <span>|</span> 36A76 RUE DE MAUBEUGE, LILLE</div>
+      <div class="meta"><span class="chip warn">p 0.712</span><span>Legal form SARL → SAS and the number after the letter changes (63 → 76). Our house-number rule reads only "36", so it sees the same number.</span></div>
+    </div>
+    <div class="pair">
+      <div class="rec">Communale Sportive SAS <span>|</span> 18 Rue de Toutes Aides, Saint-Nazaire<br>Communale Sportive <span>|</span> # 18 Rue De La Brétinais, St.-herblain</div>
+      <div class="meta"><span class="chip good">p 0.997, not chosen</span><span>Same name and number, different street and town. Another S1 owns it, so exclusivity saved this one.</span></div>
+    </div>
+    <div class="pair">
+      <div class="rec">TVC Parents SAS <span>|</span> 13 Rue Wolfgang Amadeus Mozart, Saint-Nazaire<br>TVC Energie SAS <span>|</span> No. 13 Rue Wolfgang Amadeus Mozart, St-nazaire</div>
+      <div class="meta"><span class="chip bad">p 0.994, chosen</span><span>Same address, different generic word. Likely a false match; this S1 received 7 matches against an average of 3.36.</span></div>
+    </div>
+    <div class="pair">
+      <div class="rec">Ets Inter EURL <span>|</span> 2 Impasse Aliez, Nantes<br>ÉTABLISSEMENTS INTER (EURL) <span>|</span> (no address)</div>
+      <div class="meta"><span class="chip">p 0.266</span><span>Exact name, empty address. Hard in every country (US has the same pattern), not specific to France.</span></div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>5. What was checked and works</h2>
+  <div class="two">
+    <div class="box">
+      <h3>Cleaning</h3>
+      <ul>
+        <li>Accents and Ç removed; <code>R.</code>, <code>AV</code>, <code>BD</code> → rue, ave, blvd</li>
+        <li><code>E.U.R.L.</code> → eurl, <code>SASU</code> → sas, <code>Établissements</code> → ets</li>
+        <li>Look-alike digits: <code>Nationa1e</code> → nationale</li>
+        <li>French regions → codes (hdf, naq, pdl), stop words de/la/le/du/des/et</li>
+        <li>No rule anywhere in the code is specific to one country</li>
+      </ul>
+    </div>
+    <div class="box">
+      <h3>Decision and ownership</h3>
+      <ul>
+        <li>Matches per business in France follow the US/India distribution: 5.3% none, 17.8% two, 24.1% three, 21.3% four, 13.8% five</li>
+        <li>Same-name same-number different-street pairs: only 3.5% given to the S1, 72% given to another S1</li>
+        <li>Same name, number and street: mean p 0.963, 95.6% assigned</li>
+        <li>No postcodes in French data (0.4%), same as India, so nothing is lost there</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>6. Small cleaning gaps found</h2>
+  <div class="tbl"><table>
+    <thead><tr><th>Gap</th><th class="n">France copies affected</th><th>Effect</th></tr></thead>
+    <tbody>
+      <tr><td><b>Département instead of region</b> (Nord, Gironde, Loire-Atlantique, Pas-de-Calais). S1 uses the region in 99.9% of records; the cleaner maps regions but has no département map.</td><td class="n">31.8%</td><td>Address similarity 84 instead of 89. The model does not score these pairs lower (mean p 0.77 vs 0.70), so the gain is small. "Pas-de-Calais" also creates a fake overlap with the city Calais (1.9%).</td></tr>
+      <tr><td><code>bis</code> / <code>ter</code> after the house number</td><td class="n">4.0%</td><td>One extra address word; the number itself is read correctly. The model never saw these words in training.</td></tr>
+      <tr><td><code>No.</code> / <code>#</code> before the number</td><td class="n">5.7%</td><td>Extra word "no"; India has the same (7.7%), so the model knows it.</td></tr>
+      <tr><td>Letter inside the number: <code>36A63</code></td><td class="n">0.01%</td><td>Only the first part is read as the house number. Rare.</td></tr>
+      <tr><td>Legal forms SNC, SELARL; articles au/aux</td><td class="n">rare</td><td>Not in the maps. Cosmetic.</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section>
+  <h2>7. Fixes, in the order to run them</h2>
+  <p>Expected gains are estimates. France cannot be measured directly, so F1 comes first: it turns the rest from guesses into measurements.</p>
+
+  <div class="fix">
+    <div class="fix-head"><h3><span class="id">F1</span>France-like stand-in test</h3><span class="chip">measurement · 30 min CPU</span></div>
+    <dl>
+      <dt>What</dt><dd>From the labelled US/India validation set, select businesses as crowded as France: 15 or more candidates, or a same-name same-number look-alike. Report F0.5 on that slice for every model.</dd>
+      <dt>Why</dt><dd>It gives a France proxy score that needs no submission. Every later fix is kept only if this slice improves.</dd>
+      <dt>Gain</dt><dd>None on its own; required to judge F2–F6.</dd>
+    </dl>
+  </div>
+
+  <div class="fix">
+    <div class="fix-head"><h3><span class="id">F2</span>Crowding-weighted retrain</h3><span class="chip">model · ~2 h GPU</span></div>
+    <dl>
+      <dt>What</dt><dd>Retrain the matcher on the saved training features with 3× weight on crowded training businesses (the retrain command already supports row weights), then re-score test and re-apply the cross-encoder.</dd>
+      <dt>Why</dt><dd>The model hesitates on France because crowded cases are rare in training. More weight on the India cases that look like France teaches it which small differences matter.</dd>
+      <dt>Gain</dt><dd>France +0.01 to +0.03, which is leaderboard +0.0015 to +0.0045.</dd>
+      <dt>Risk</dt><dd>US/India may drop slightly; rejected if validation falls by more than 0.0003.</dd>
+    </dl>
+  </div>
+
+  <div class="fix">
+    <div class="fix-head"><h3><span class="id">F3</span>Département → region cleaning</h3><span class="chip">cleaning · ~2 h CPU</span></div>
+    <dl>
+      <dt>What</dt><dd>Map département names to their region code, but only when a whole comma-separated part of the address is a département name, so US/India addresses are untouched. Rebuild the test features and cross-encoder scores; no retraining needed.</dd>
+      <dt>Why</dt><dd>32% of French copies name the département while S1 names the region, the same kind of variant as "Maryland" vs "MD" that is already handled for the US.</dd>
+      <dt>Gain</dt><dd>Leaderboard +0.000 to +0.002. Low risk.</dd>
+    </dl>
+  </div>
+
+  <div class="fix">
+    <div class="fix-head"><h3><span class="id">F4</span>Street-identity features</h3><span class="chip">features · ~5 h, day 2</span></div>
+    <dl>
+      <dt>What</dt><dd>New features comparing only the street name (without house number, street type, city, region or département), weighted by how rare the street is within the country, plus whether the rest of the address after the house number matches.</dd>
+      <dt>Why</dt><dd>The French look-alikes differ mainly in the street or in one generic word. Current address features are diluted by the city and region words that all French addresses share.</dd>
+      <dt>Gain</dt><dd>France +0.01 to +0.03. Needs a full feature rebuild for training, so it is the largest job.</dd>
+    </dl>
+  </div>
+
+  <div class="fix">
+    <div class="fix-head"><h3><span class="id">F5</span>Legal-form swap check</h3><span class="chip">analysis · 15 min</span></div>
+    <dl>
+      <dt>What</dt><dd>Measure in the training answers how often true matches change legal form (LLC ↔ Inc, Pvt Ltd ↔ Ltd) compared with non-matches.</dd>
+      <dt>Why</dt><dd>4.9% of uncertain French pairs have a SARL/SAS swap. If swaps are mostly noise in true matches, the legal-conflict feature should not push these pairs down.</dd>
+      <dt>Gain</dt><dd>Unknown until measured.</dd>
+    </dl>
+  </div>
+
+  <div class="fix">
+    <div class="fix-head"><h3><span class="id">F6</span>Smaller candidate lists for crowded businesses</h3><span class="chip">candidates · 1 h</span></div>
+    <dl>
+      <dt>What</dt><dd>Tighten the candidate keep rule where lists are long; keep only if validation recall holds.</dd>
+      <dt>Why</dt><dd>France is 15% of businesses but 5.6 million of the 19.5 million candidate pairs. A smaller candidate file ranks higher in the final judging.</dd>
+      <dt>Gain</dt><dd>Smaller <code>candidate_pairs.tsv</code>; neutral on F0.5 if recall is kept.</dd>
+    </dl>
+  </div>
+
+  <div class="fix">
+    <div class="fix-head"><h3><span class="id">F7</span>One diagnostic submission</h3><span class="chip">1 of 5 daily submissions</span></div>
+    <dl>
+      <dt>What</dt><dd>Submit <code>v9_plain</code>, which differs from the submitted file only in the France threshold (3.44 instead of 3.36 matches per business).</dd>
+      <dt>Why</dt><dd>The leaderboard difference divided by 0.15 is a direct France measurement, the only one available.</dd>
+    </dl>
+  </div>
+
+  <div class="box">
+    <h3>Already tried</h3>
+    <ul>
+      <li>France-adapted cross-encoder (<code>v9_cefr</code>): validation 0.98531 against 0.98585, not submitted.</li>
+      <li>Self-training on French pseudo-labels: +0.004 on the US→India stand-in, no change on the leaderboard.</li>
+      <li>Matching France's matches per business to US/India (threshold 0.895): part of the +0.0015 gain in v9_ce.</li>
+    </ul>
+  </div>
+</section>
+
+<section>
+  <h2>8. What a better France is worth</h2>
+  <p>With US/India held at 0.98585, the leaderboard is about 0.85 × US/India + 0.15 × France.</p>
+  <div class="tbl"><table>
+    <thead><tr><th>France score</th><th class="n">Leaderboard</th><th>Note</th></tr></thead>
+    <tbody>
+      <tr><td class="n fr">0.916</td><td class="n">0.9754</td><td>now (v9_ce)</td></tr>
+      <tr><td class="n">0.930</td><td class="n">0.9775</td><td>F2 + F3 working as hoped</td></tr>
+      <tr><td class="n">0.950</td><td class="n">0.9805</td><td>adds F4</td></tr>
+      <tr><td class="n">0.970</td><td class="n">0.9835</td><td></td></tr>
+      <tr><td class="n">0.986</td><td class="n">0.9859</td><td>France as good as US/India</td></tr>
+      <tr><td class="n">0.990 <span class="x">+ US/India 0.991</span></td><td class="n">0.9909</td><td>current top of the leaderboard</td></tr>
+    </tbody>
+  </table></div>
+  <p class="note">The top score needs both parts to improve: France to about 0.99 and US/India from 0.986 to about 0.991.</p>
+</section>
+
+<footer>
+  Sources: <code>runs/france_diag.txt</code>, <code>runs/france_profile.txt</code>, scripts <code>tmp/scratch/france_diag.py</code>, <code>france_profile.py</code>, <code>france_street.py</code>, <code>france_dept.py</code>. Model: v9 matcher + MiniLM-L12 cross-encoder, test run 20260926-155941-v9_ce. All figures are counts over the test split; no labels exist for France.
+</footer>
+
+</div>

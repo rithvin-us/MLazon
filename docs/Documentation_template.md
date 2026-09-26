@@ -88,6 +88,13 @@ with *competitor* S1s so validation sees the same record-ownership competition a
   address mean/max, house-number vote), `twin_better` (a near-identical sibling has the exact house number
   and this one does not), candidates per S1, gaps to the S1's best, within-S1 ranks of key similarities.
 
+- **Country-IDF token agreement (v10):** name and address tokens weighted by their inverse document frequency within
+  the record's own country (S1 plus Source 2/3 of the split, unlabelled). Near-identical leftovers (typos,
+  truncations) count as shared; features are the weighted Jaccard, the weighted share of each side left unmatched,
+  "exactly one word replaced", the IDF of the most distinctive differing word, and within-S1 ranks. Where names and
+  streets come from a small vocabulary (France: generic words, ~15 cities, 15k address words) plain fuzzy ratios stay
+  high for different businesses; IDF weighting lets the distinctive words decide.
+
 **Model type:** XGBoost (`hist`, CUDA), depth 8, learning rate 0.05, early stopping on a 5% holdout of the
 training S1 by log-loss (the decision relies on calibrated probabilities), trained on 1.6M S1 (14.3M pairs),
 up to 6,000 rounds (best iteration 5,437).
@@ -106,6 +113,16 @@ ground truth structure). Validation S1 are sampled as whole blocks (country | ci
 ground-truth owners of their candidates are scored as *competitors* (never counted in the metric), so
 exclusivity acts as it does on the full test set.
 
+**Test-density matching:** the test split has ~5.8 Source 2/3 records per S1 against 4.7 in train, with the same
+~3.46 true matches per S1 (the high-confidence pairs per S1 agree), i.e. about twice the unmatched look-alikes;
+uncertain pairs per S1 are ~2x validation's. `redecide` copies validation negatives per score band until each band's
+pairs per S1 match the test scores, and re-tunes the decision on that denser validation (a stricter threshold).
+
+**Unseen-country proxy:** France has no labels, so every change aimed at it is checked by training on one labelled
+country and scoring the other (US -> India, India -> US) with the France decision rule (threshold whose matches per
+S1 equal the training country's). Changes are kept by an estimated leaderboard effect of 0.85 x (validation change) +
+0.15 x (proxy change), the countries' test shares.
+
 ---
 
 ## 5. Results & Error Analysis
@@ -116,11 +133,14 @@ exclusivity acts as it does on the full test set.
 | v4 | Indic transliteration, two-channel blocking, exclusivity | 0.9708 | – |
 | v5 | learned re-ranker in blocking | 0.9764 | 0.9685 |
 | v6 | group-consensus + sharper pair features, competitor-aware tuning | 0.9812 | – |
-| v6 + CE | cross-encoder on the uncertain band | 0.9839 | _pending_ |
+| v6 + CE | cross-encoder on the uncertain band | 0.9839 | – |
 | v7 | adaptive candidates (11.6/S1 on test), 700k training S1 | 0.9822 | – |
 | v7 + CE | cross-encoder MiniLM-L6 | 0.9846 | 0.9739 |
 | v8 + CE | 1.3M training S1, MiniLM-L12 | 0.9852 | – |
-| **v9 + CE** | **final: look-alike digit normalisation, 1.6M S1, L12 on 1M pairs, unlabelled-country decision** | **0.9859** | _pending_ |
+| v9 + CE | look-alike digit normalisation, 1.6M S1, L12 on 1M pairs, unlabelled-country decision | 0.9859 | 0.9754 |
+| v10 + CE | + country-IDF name and address agreement (stage 1 0.9832 -> 0.9850) | 0.9861 | – |
+| v10s + CE | + country-IDF name agreement only (the subset that transfers to an unseen country) | 0.9859 | – |
+| **mix** | **US/India rows: v10 + CE, test-density decision; France rows: v10s + CE** | **0.9860** | _pending_ |
 
 - **F_0.5 Score (macro):** 0.9859 on validation (40k block-sampled train S1 never used for training, decision
   tuned with competitor S1); v6 onwards numbers include competitor-aware tuning.
@@ -145,7 +165,8 @@ nudged distractors. Everything runs on a 16 GB laptop by streaming per country a
 `code/business_entity_resolution/` — `README.md` (exact commands), `requirements.txt` (pinned), `src/`:
 `pipeline.py` (entry point: `prep`, `train`, `predict`, `decide`, `rescore`, `submit`), `prep.py`,
 `normalize.py`, `indic.py`, `blocking.py`, `features.py`, `stage2.py`, `config.py`, `io_utils.py`,
-`tracking.py`, `hwmon.py`. `prep` → `train` → `predict --run <train_run_id>` regenerates both output files.
+`tracking.py`, `hwmon.py`. `prep` → `train` → `predict --run <train_run_id>` regenerates both output files;
+`ce-train` / `ce-apply` add stage 3, `redecide` the test-density decision (see README for the exact commands).
 
 ### B. Additional Results
 - Final candidate set on test: 19,481,044 pairs (11.24 per S1; 2 S1 with no candidates).
@@ -154,5 +175,13 @@ nudged distractors. Everything runs on a 16 GB laptop by streaming per country a
   i.e. it over-matches. For any country without validation labels the decision picks the threshold at which its
   matches per S1 equal the labelled countries' (France: 0.895 after the cross-encoder).
 - Validation blocking recall by stage: IDF top-40 0.9645 · re-ranked top-40 0.9875 · adaptive (~9) ~0.984.
+- Test vs train density: Source 2/3 records per S1 are 5.76 (US), 5.82 (India), 5.53 (France) on test against 4.67 in
+  train; pairs with 0.2 <= p < 0.8 per S1 on test are 0.32 (US) / 0.23 (India) against 0.16 / 0.15 on validation.
+  Validation made equally dense (`redecide`): v9 + CE 0.9859 -> 0.9841, v10 + CE 0.9861 -> 0.9848 (0.9846 before
+  re-tuning), which is closer to what the leaderboard sees.
+- Unseen-country proxy (F0.5 on the held-out country, France-style decision; train US -> India / India -> US):
+  v9 features 0.9433 / 0.9665 · + all country-IDF features 0.9385 / 0.9529 · + name country-IDF only 0.9463 / 0.9684.
+  Address IDF weights do not transfer between countries (their vocabularies differ too much); name IDF weights do.
+  Monotone constraints and depth 6 did not help.
 - Loss breakdown (v6 validation, F0.5 points lost): model misses 0.0077, S1 with zero correct matches
   0.0044, false positives 0.0039, blocking misses 0.0034, singleton false positives 0.0009.
