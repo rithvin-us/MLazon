@@ -385,6 +385,47 @@ footer{font-size:13px;color:var(--muted);border-top:1px solid var(--line);paddin
   <p class="note">The top score needs both parts to improve: France to about 0.99 and US/India from 0.986 to about 0.991.</p>
 </section>
 
+<section>
+  <h2>9. Overnight results (27 Sep)</h2>
+  <div class="verdict">
+    <h3>What to upload</h3>
+    <ul>
+      <li><code>output/SUBMIT_THIS/matching_results.tsv</code>: US/India rows from <b>v10</b>, France rows from <b>v10s</b>, both with the test-density decision. Validator with <code>--check-ids</code>: PASS.</li>
+      <li>Expected leaderboard about <b>0.976</b> (range 0.975–0.978), up from 0.975411. 0.985 is out of reach with tonight's changes; see below.</li>
+    </ul>
+  </div>
+  <div class="two">
+    <div class="box">
+      <h3>Finding 1: test is denser than validation</h3>
+      <ul>
+        <li>Test has 5.8 Source 2/3 records per business against 4.7 in training, with the same ~3.46 true matches.</li>
+        <li>Uncertain pairs per business are about twice validation's (US 0.32 vs 0.16).</li>
+        <li>On validation made equally dense, v9 + cross-encoder scores 0.9841, not 0.9859. So US/India on test is about 0.984 and France about 0.93.</li>
+        <li>A new <code>redecide</code> step re-tunes the threshold for this density.</li>
+      </ul>
+    </div>
+    <div class="box">
+      <h3>Finding 2: country-IDF features</h3>
+      <ul>
+        <li>Words weighted by how rare they are in their own country. Stage-1 validation rose from 0.9832 to 0.9850 (v10).</li>
+        <li>The unseen-country check (train on one country, score the other): address-IDF features <b>hurt</b> transfer (−0.009), name-IDF features <b>help</b> (+0.0024).</li>
+        <li>So France uses v10s (name-IDF only) and US/India use v10 (all IDF features).</li>
+      </ul>
+    </div>
+  </div>
+  <div class="tbl"><table>
+    <thead><tr><th>File</th><th class="n">Plain val</th><th class="n">Test-density val</th><th class="n">Unseen-country change</th><th class="n">Est. LB change</th></tr></thead>
+    <tbody>
+      <tr><td>v9_ce (submitted, LB 0.975411)</td><td class="n">0.98585</td><td class="n">0.98406</td><td class="n">0</td><td class="n">0</td></tr>
+      <tr><td>v9_ce + test-density decision</td><td class="n">0.98583</td><td class="n">0.98420</td><td class="n">0</td><td class="n">+0.0001</td></tr>
+      <tr><td>v10_ce + test-density decision</td><td class="n">0.98596</td><td class="n">0.98480</td><td class="n">−0.0092</td><td class="n">−0.0008</td></tr>
+      <tr><td>v10s_ce + test-density decision</td><td class="n">0.98582</td><td class="n">0.98409</td><td class="n">+0.0024</td><td class="n">+0.0004</td></tr>
+      <tr><td><b>mix (US/India v10, France v10s)</b></td><td class="n">0.9860</td><td class="n">0.98480</td><td class="n">+0.0024</td><td class="n fr">+0.0010</td></tr>
+    </tbody>
+  </table></div>
+  <p class="note">Tried and dropped: 3× weight on crowded businesses, monotone constraints, depth 6, ensembles v9+v10 and v10+v10s (all equal or worse on test-density validation or on the unseen-country check).</p>
+</section>
+
 <footer>
   Sources: <code>runs/france_diag.txt</code>, <code>runs/france_profile.txt</code>, scripts <code>tmp/scratch/france_diag.py</code>, <code>france_profile.py</code>, <code>france_street.py</code>, <code>france_dept.py</code>. Model: v9 matcher + MiniLM-L12 cross-encoder, test run 20260926-155941-v9_ce. All figures are counts over the test split; no labels exist for France.
 </footer>

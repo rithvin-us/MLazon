@@ -61,9 +61,15 @@ def train_ce(pp, run, src_run: Path, out: Path, n_pairs: int = 600_000, epochs: 
     run.log(f"ce-train: base {base}, {tr.height:,} pairs (pos {n_pos:,}) from {hard.height:,} hard pairs, device {dev}")
     tr = texts(pp, tr.select("s1_idx", "cand_idx", "label"), "train")
     tok = Tok.from_pretrained(base)
-    model = Model.from_pretrained(base, num_labels=1).to(dev)
-    opt = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=0.01)
-    steps = epochs * (tr.height // BS)
+    model = Model.from_pretrained(base, num_labels=1, ignore_mismatched_sizes=True).to(dev)
+    bs = BS
+    if sum(p.numel() for p in model.parameters()) > 150e6:  # multilingual base: the 250k-token embedding matrix is
+        emb = model.get_input_embeddings()                    # most of the weights; freeze it so AdamW fits in 6 GB
+        emb.weight.requires_grad_(False)
+        bs = 32                                               # long Indian addresses: 64 x 96 tokens overflows 6 GB
+        run.log(f"ce-train: froze input embeddings ({emb.weight.numel() / 1e6:.0f}M params), batch {bs}")
+    opt = torch.optim.AdamW([p for p in model.parameters() if p.requires_grad], lr=LR, weight_decay=0.01)
+    steps = epochs * (tr.height // bs)
     sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=LR, total_steps=steps, pct_start=0.06)
     scaler = torch.amp.GradScaler(enabled=dev == "cuda")
     lossf = torch.nn.BCEWithLogitsLoss()
@@ -73,8 +79,8 @@ def train_ce(pp, run, src_run: Path, out: Path, n_pairs: int = 600_000, epochs: 
     step = 0
     for ep in range(epochs):
         order = np.random.default_rng(seed + ep).permutation(len(y))
-        for i in range(0, len(y) - BS + 1, BS):
-            b = order[i:i + BS]
+        for i in range(0, len(y) - bs + 1, bs):
+            b = order[i:i + bs]
             enc = tok([t1[j] for j in b], [t2[j] for j in b], truncation=True, max_length=MAXLEN, padding=True,
                       return_tensors="pt").to(dev)
             with torch.autocast(device_type="cuda", dtype=torch.float16, enabled=dev == "cuda"):
@@ -83,7 +89,8 @@ def train_ce(pp, run, src_run: Path, out: Path, n_pairs: int = 600_000, epochs: 
             scaler.scale(loss).backward()
             scaler.step(opt)
             scaler.update()
-            sched.step()
+            if step < steps:
+                sched.step()
             step += 1
             if step % 250 == 0:
                 run.progress(step / steps, f"epoch {ep} step {step}/{steps} loss {loss.item():.4f} [{dev}]")
@@ -117,7 +124,8 @@ def _band(df: pl.DataFrame) -> pl.DataFrame:
 
 
 def _x(d: pl.DataFrame) -> np.ndarray:
-    return d.select((pl.col("p").log() - (1 - pl.col("p")).log()).alias("lp"), "ce").to_numpy()
+    ces = sorted(c for c in d.columns if c == "ce" or c.startswith("ce_"))
+    return d.select((pl.col("p").log() - (1 - pl.col("p")).log()).alias("lp"), *ces).to_numpy()
 
 
 def _restack(full: pl.DataFrame, band: pl.DataFrame, p2: np.ndarray) -> pl.DataFrame:
@@ -130,12 +138,16 @@ def apply_ce(pp, cfg, run, src_run: Path, pred_run: Path, ce_dir: Path) -> None:
     """Band re-scoring + stacking + competitor-aware re-tuning on val, then the same on src/pred_run test scores."""
     import xgboost as xgb
     from sklearn.model_selection import GroupKFold
-    score = _Scorer(ce_dir)
+    # ce_dir may list several fine-tuned cross-encoders ("dirA,dirB"): each scores the band, the stacker sees all
+    dirs = [Path(x) for x in str(ce_dir).split(",") if x]
+    scorers = [_Scorer(d) for d in dirs]
+    stack = {**STACK, "monotone_constraints": "(" + ",".join(["1"] * (len(dirs) + 1)) + ")"}
 
     def with_ce(df: pl.DataFrame, split: str, what: str) -> pl.DataFrame:
         b = texts(pp, _band(df).select("s1_idx", "cand_idx", "p", *[c for c in ("label",) if c in df.columns]), split)
         t = time.time()
-        b = b.with_columns(pl.Series("ce", score(b), dtype=pl.Float32)).drop("t1", "t2")
+        b = b.with_columns([pl.Series("ce" if len(scorers) == 1 else f"ce_{i}", sc(b), dtype=pl.Float32)
+                            for i, sc in enumerate(scorers)]).drop("t1", "t2")
         run.log(f"ce-apply: {what} band {b.height:,} pairs scored in {time.time() - t:.0f}s")
         return b
 
@@ -146,8 +158,8 @@ def apply_ce(pp, cfg, run, src_run: Path, pred_run: Path, ce_dir: Path) -> None:
     yb, xb = vb["label"].to_numpy(), _x(vb)
     oof = np.zeros(vb.height, np.float32)  # out-of-fold by block: honest val estimate of the stack
     for trn, tst in GroupKFold(n_splits=5).split(xb, yb, vb["block"].fill_null("?").to_numpy()):
-        oof[tst] = xgb.train(STACK, xgb.DMatrix(xb[trn], yb[trn]), 200).predict(xgb.DMatrix(xb[tst]))
-    stacker = xgb.train(STACK, xgb.DMatrix(xb, yb), 200)
+        oof[tst] = xgb.train(stack, xgb.DMatrix(xb[trn], yb[trn]), 200).predict(xgb.DMatrix(xb[tst]))
+    stacker = xgb.train(stack, xgb.DMatrix(xb, yb), 200)
     stacker.save_model(str(run.dir / "ce_stacker.json"))
     va2 = _restack(va, vb, oof)
     lab0 = lambda d: d.select("s1_idx", "cand_idx", pl.lit(0, pl.Int8).alias("label"), "p")  # noqa: E731

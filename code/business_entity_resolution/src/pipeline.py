@@ -916,7 +916,7 @@ def shape_matched_selection(scored: pl.DataFrame, dec: dict, labelled: set[str],
             continue
         part = scored.filter(pl.col("country_n") == c)
         best = None
-        for t in [x / 1000 for x in range(int(float(np.atleast_1d(dec["param"])[0]) * 1000), 991, 5)]:
+        for t in [x / 1000 for x in range(300, 996, 5)]:  # both directions: an unseen country may need a lower one too
             d = {"mode": "threshold", "param": t, "excl": dec.get("excl", False)}
             sel = apply_decision(part, d, floor)
             gap = abs(mean_k(sel, c) - target)

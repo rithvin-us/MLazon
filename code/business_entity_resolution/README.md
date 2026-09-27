@@ -55,6 +55,15 @@ Step 3 runs the official validator (`student_resource/utils/validate_submission.
 file and a streamed format check on the candidate file (the official validator's candidate check needs
 more RAM than 16 GB machines have for this candidate volume).
 
+Stage 3 can stack several fine-tuned cross-encoders: pass a comma list to `--ce-dir` and the stacker uses all of
+them. Second cross-encoder: `BAAI/bge-reranker-base` (MIT, 278M, multilingual; input embeddings frozen, batch 32
+so it trains in 6 GB):
+```
+python $SRC/pipeline.py ce-train --run <train or augmented run> --ce-base BAAI/bge-reranker-base --ce-pairs 800000 \
+       --ce-epochs 1 --ce-dir models/ce_bge_base
+python $SRC/pipeline.py ce-apply --run <train run> --feats-run <predict run> \
+       --ce-dir models/ce_<train_run_id>,models/ce_bge_base --name final_ce2
+```
 ```
 # 5. decision matched to the test split's distractor density
 python $SRC/pipeline.py redecide --run <final_ce_run_id> --name final_dense

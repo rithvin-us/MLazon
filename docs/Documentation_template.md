@@ -183,5 +183,15 @@ nudged distractors. Everything runs on a 16 GB laptop by streaming per country a
   v9 features 0.9433 / 0.9665 · + all country-IDF features 0.9385 / 0.9529 · + name country-IDF only 0.9463 / 0.9684.
   Address IDF weights do not transfer between countries (their vocabularies differ too much); name IDF weights do.
   Monotone constraints and depth 6 did not help.
+- Stage 3 with a stronger reranker: `BAAI/bge-reranker-base` (MIT, 278M, multilingual) fine-tuned on 800k pairs and
+  stacked with the MiniLM-L12 cross-encoder: validation 0.98612 -> 0.98623. The ambiguity left on US/India is
+  not a model-capacity problem.
+- Where the remaining validation loss is (v10 + CE): true matches the model rejects 0.0074 (75% of them are copies
+  with an empty address whose exact name also appears on unowned copies: 39% match rate even when unique), blocking
+  misses 0.0046, false positives 0.0019. The model is calibrated in every slice checked (empty-address copies by
+  name crowding, same-name records across the whole pool, raw spelling identity, copies already confirmed), so
+  these are genuinely ambiguous given name and address.
+- Unseen-country match count: on the proxy the best matches per S1 for the held-out country is 0.96x (US -> India)
+  and 1.00x (India -> US) of the training country's; the France rule keeps 1.00x.
 - Loss breakdown (v6 validation, F0.5 points lost): model misses 0.0077, S1 with zero correct matches
   0.0044, false positives 0.0039, blocking misses 0.0034, singleton false positives 0.0009.
