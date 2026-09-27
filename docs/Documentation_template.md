@@ -140,7 +140,12 @@ S1 equal the training country's). Changes are kept by an estimated leaderboard e
 | v9 + CE | look-alike digit normalisation, 1.6M S1, L12 on 1M pairs, unlabelled-country decision | 0.9859 | 0.9754 |
 | v10 + CE | + country-IDF name and address agreement (stage 1 0.9832 -> 0.9850) | 0.9861 | – |
 | v10s + CE | + country-IDF name agreement only (the subset that transfers to an unseen country) | 0.9859 | – |
-| **mix** | **US/India rows: v10 + CE, test-density decision; France rows: v10s + CE** | **0.9860** | _pending_ |
+| mix | US/India rows: v10 + CE, test-density decision; France rows: v10s + CE | 0.9860 | 0.9758 |
+| **mix + French pseudo-labels** | **France rows from v10s retrained with structure-based French pseudo-labels (confident exclusive owners as positives, records confidently owned by another French S1 as hard negatives); France F0.5 +0.0013 on the leaderboard** | **0.9860** | **0.9760** |
+
+Leaderboard decomposition (one diagnostic submission with the French rows emptied): US/India 0.983, France 0.932 for
+v9 + CE. Validation made as distractor-dense as test predicted US/India 0.984, so validation tracks the test closely;
+the gap to the top of the leaderboard is mostly France.
 
 - **F_0.5 Score (macro):** 0.9859 on validation (40k block-sampled train S1 never used for training, decision
   tuned with competitor S1); v6 onwards numbers include competitor-aware tuning.

@@ -17,15 +17,22 @@ from features import FEATURES  # noqa: E402
 
 POS = float(sys.argv[1]) if len(sys.argv) > 1 else 0.98
 W = float(sys.argv[2]) if len(sys.argv) > 2 else 0.5
+SRC_RUN = sys.argv[3] if len(sys.argv) > 3 else "v10s_ce_dense"  # France scores the labels come from
 R = pp.RUNS_DIR
 out = R / f"{time.strftime('%Y%m%d-%H%M%S')}-frpseudo"
 out.mkdir()
 cm = pp.scan_norm("test", "s1").select(pl.col("idx").alias("s1_idx"), "country_n").collect()
 fr = cm.filter(pl.col("country_n") == "france").select("s1_idx")
-sc = pl.read_parquet(sorted(R.glob("*-v10s_ce_dense"))[-1] / "pred" / "scored-*.parquet").select("s1_idx", "cand_idx", "p").join(fr, on="s1_idx")
-sc = sc.with_columns(pl.col("p").max().over("cand_idx").alias("pmax"), pl.col("p").rank("ordinal", descending=True).over("cand_idx").alias("own"))
+# SRC_RUN may list several runs ("a,b"): positives from the last one, hard negatives from all of them (a record
+# confidently owned by another S1 stays a negative for every other S1), minus pairs that are positives
+hnegs = []
+for k, name in enumerate(SRC_RUN.split(",")):
+    sc = pl.read_parquet(sorted(R.glob(f"*-{name}"))[-1] / "pred" / "scored-*.parquet").select("s1_idx", "cand_idx", "p").join(fr, on="s1_idx")
+    sc = sc.with_columns(pl.col("p").max().over("cand_idx").alias("pmax"), pl.col("p").rank("ordinal", descending=True).over("cand_idx").alias("own"))
+    hnegs.append(sc.filter((pl.col("pmax") >= POS) & (pl.col("own") > 1)).select("s1_idx", "cand_idx"))
 pos = sc.filter((pl.col("p") >= POS) & (pl.col("own") == 1)).select("s1_idx", "cand_idx", pl.lit(1, pl.Int8).alias("label"))
-hneg = sc.filter((pl.col("pmax") >= POS) & (pl.col("own") > 1)).select("s1_idx", "cand_idx", pl.lit(0, pl.Int8).alias("label"))
+hneg = (pl.concat(hnegs).unique().join(pos.select("s1_idx", "cand_idx"), on=["s1_idx", "cand_idx"], how="anti")
+        .with_columns(pl.lit(0, pl.Int8).alias("label")))
 lab = pl.concat([pos, hneg])
 feats = sorted((sorted(R.glob("*-v10testsrc"))[-1] / "test_feats").glob("part-*.parquet"))
 n = {"pos": pos.height, "hneg": hneg.height, "eneg": 0}
