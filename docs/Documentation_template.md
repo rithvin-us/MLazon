@@ -101,13 +101,19 @@ up to 6,000 rounds (best iteration 5,437).
 Training data is streamed from per-chunk parquet files into a `QuantileDMatrix`.
 
 **Stage 3 — cross-encoders on the uncertain band:** `cross-encoder/ms-marco-MiniLM-L6-v2` (Apache-2.0, 22M
-parameters; in the final run the L12 variant, 33M parameters, plus the multilingual `BAAI/bge-reranker-base`, MIT,
-278M, stacked as a third input) fine-tuned for 2 epochs on 1M training pairs ("name | address" of S1 vs candidate, balanced
+parameters; the L12 variant, 33M parameters, in the final run; the multilingual `BAAI/bge-reranker-base`, MIT,
+278M, stacked as a third input was tested) fine-tuned for 2 epochs on 1M training pairs ("name | address" of S1 vs candidate, balanced
 positives / hard negatives). It re-scores only pairs with stage-1 probability in [0.02, 0.995) — 2.7M of the
 20.1M test pairs — and a monotone depth-3 XGBoost stacks [logit p, cross-encoder logit] (fit on the validation
 band with out-of-fold estimates by block). Band AUC: stage-1 0.952, cross-encoder 0.944, stacked 0.969.
 
-**Stage 4 — competition and S1-context re-scoring (final file, US/India rows):** a depth-4 monotone XGBoost on the
+**Stage 4 — competition and S1-context re-scoring (tested, not in the final file):** leaderboard 0.9735 against
+0.9760 for the final file, although validation said +0.0013 / +0.0021. The validation competitors are the
+ground-truth owners of the validation candidates (so that exclusivity acts as on test), i.e. selected by label: a
+competing score means "the record belongs elsewhere" on validation but only "a look-alike S1 also retrieved it" on
+test, and the per-S1 context features shift with the test's distractor density in ways the synthetic copies do not
+reproduce. A decision rule with one or two parameters survives this validation design; a learned re-scorer does not.
+Design: a depth-4 monotone XGBoost on the
 stacked score p of every (S1, record) pair plus features computed from all scores: the best competing S1's p for the
 same record, the margin to it, competitors with p >= 0.2, this S1's rank for the record, the S1's best p, the
 record's rank within the S1 and the gap to the S1's next candidate. It is trained on density-matched validation
@@ -154,9 +160,9 @@ S1 equal the training country's). Changes are kept by an estimated leaderboard e
 | v10 + CE | + country-IDF name and address agreement (stage 1 0.9832 -> 0.9850) | 0.9861 | – |
 | v10s + CE | + country-IDF name agreement only (the subset that transfers to an unseen country) | 0.9859 | – |
 | mix | US/India rows: v10 + CE, test-density decision; France rows: v10s + CE | 0.9860 | 0.9758 |
-| mix + French pseudo-labels | France rows from v10s retrained with structure-based French pseudo-labels (confident exclusive owners as positives, records confidently owned by another French S1 as hard negatives); France F0.5 +0.0013 on the leaderboard | 0.9860 | 0.9760 |
+| **mix + French pseudo-labels (final)** | **France rows from v10s retrained with structure-based French pseudo-labels (confident exclusive owners as positives, records confidently owned by another French S1 as hard negatives); France F0.5 +0.0013 on the leaderboard** | **0.9860** | **0.9760** |
 | both cross-encoders | MiniLM-L12 + multilingual bge-reranker-base stacked on every row; France rows: rule-based fallback for the pairs the pseudo-label-adapted model is unsure of (0.2 <= p < 0.8) | 0.9862 | – |
-| **final: + stage 2** | **US/India rows re-scored by a stage-2 model on competition and S1-context features of the stacked scores, trained on density-matched validation (density-matched val 0.98487 -> 0.98683); France rows as above** | **0.9875** | **pending** |
+| + stage 2 | US/India rows re-scored by a stage-2 model on competition and S1-context features of the stacked scores, trained on density-matched validation (density-matched val 0.98487 -> 0.98683); France rows as above | 0.9875 | 0.9735 |
 
 Leaderboard decomposition (one diagnostic submission with the French rows emptied): US/India 0.983, France 0.932 for
 v9 + CE. Validation made as distractor-dense as test predicted US/India 0.984, so validation tracks the test closely;
@@ -207,8 +213,8 @@ file (see README for the exact commands).
   Monotone constraints and depth 6 did not help.
 - Stage 3 with a stronger reranker: `BAAI/bge-reranker-base` (MIT, 278M, multilingual) fine-tuned on 800k pairs and
   stacked with the MiniLM-L12 cross-encoder: validation 0.98612 -> 0.98623 (density-matched 0.9848 -> 0.9849); on the
-  pseudo-label-adapted France model 0.98578 -> 0.98604 (density-matched 0.98433 -> 0.98451). Used in the final file
-  for every row; the ambiguity left on US/India is not a model-capacity problem. With both cross-encoders the France
+  pseudo-label-adapted France model 0.98578 -> 0.98604 (density-matched 0.98433 -> 0.98451). Not in the final file
+  (only submitted together with stage 2); the ambiguity left on US/India is not a model-capacity problem. With both cross-encoders the France
   scores are less inflated: 3.343 matches per S1 is reached at a threshold of 0.865 instead of 0.920.
 - Where the remaining validation loss is (v10 + CE): true matches the model rejects 0.0074 (75% of them are copies
   with an empty address whose exact name also appears on unowned copies: 39% match rate even when unique), blocking

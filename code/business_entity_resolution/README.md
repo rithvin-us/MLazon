@@ -86,8 +86,10 @@ python france/fr_bge_chain.py   # v10sfr rescored with both cross-encoders (L12 
 # 8. stage 2 on the stacked scores (competition + S1 context), trained on density-matched validation, US/India rows
 python stage2/stage2_apply.py   # -> PROBE_stage2_usin (US/India re-scored, France rows kept) and PROBE_stage2_all
 ```
-Final file: US/India rows from step 8 (v10 + both cross-encoders + stage 2); France rows from step 7
-(`fr_bge_chain.py`); validator PASS. A second pseudo-label round (`build_fr_pseudo.py 0.98 1.0 v10s_ce_dense,v10sfr_dense`) was mixed on
+Final file (leaderboard 0.975968): US/India rows from step 6 (v10 + MiniLM-L12 cross-encoder + `redecide`);
+France rows from the first two commands of step 7 (`fr_chain.py <ts>-frpseudo v10sfr`, i.e. `mix_v10sfr`). Tested
+variants: both cross-encoders + France rule (`fr_bge_chain.py`, not submitted) and step 8 (stage 2, leaderboard
+0.97347, worse). A second pseudo-label round (`build_fr_pseudo.py 0.98 1.0 v10s_ce_dense,v10sfr_dense`) was mixed on
 the unseen-country proxy and is not used.
 The test pool has ~5.8 Source 2/3 records per S1 against 4.7 in train with the same ~3.46 true matches, i.e.
 about twice the unmatched look-alikes. `redecide` copies validation negatives per score band until the band
