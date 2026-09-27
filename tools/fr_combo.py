@@ -19,7 +19,8 @@ import pipeline as pp  # noqa: E402
 ROOT = Path(r"D:\amazon-ml")
 R = pp.RUNS_DIR
 SUB = ROOT / "output" / "submissions"
-BASE = SUB / "BEST_LB0.975968_mix_v10sfr_matching_results.tsv"  # LB-verified: US/India rows come from here
+BEST = SUB / "BEST_LB0.975968_mix_v10sfr_matching_results.tsv"  # LB-verified
+BASE = Path(os.environ.get("FR_BASE", BEST))  # US/India rows come from here (FR_BASE: another mix output)
 SRC_RUN = sys.argv[1] if len(sys.argv) > 1 else "v10sfr_dense"
 RULE = sys.argv[2] != "0" if len(sys.argv) > 2 else True
 TAG = sys.argv[3] if len(sys.argv) > 3 else "final"
@@ -71,11 +72,12 @@ def changed(other, only_fr=True):
 
 rd = lambda p: pl.read_csv(p, separator="\t", quote_char=None, infer_schema=False)  # noqa: E731
 print(f"{SRC_RUN} rule={RULE} {st} | France thr {th:.3f} -> {sel.height / fr.height:.3f} matches/S1 (labelled {k_lab:.3f})")
-print(f"rows {out.height:,} (base {base.height:,}); US/India lists changed vs base {changed(base, False):.6f}")
+print(f"rows {out.height:,} (base {base.height:,}); US/India lists changed vs base {changed(base, False):.6f}, "
+      f"vs LB-verified file {changed(rd(BEST), False):.4f}")
 print(f"French lists changed: vs base {changed(base):.4f}, vs PROBE_v10sfr2 {changed(rd(SUB / 'PROBE_france_v10sfr2_matching_results.tsv')):.4f}, "
       f"vs PROBE_rule {changed(rd(SUB / 'PROBE_france_rule_matching_results.tsv')):.4f}")
 if TAG != "check":
-    dst = SUB / f"PROBE_france_{TAG}_matching_results.tsv"
+    dst = SUB / (f"PROBE_{TAG}_matching_results.tsv" if "FR_BASE" in os.environ else f"PROBE_france_{TAG}_matching_results.tsv")
     out.write_csv(dst, separator="\t", quote_style="never")
     r = subprocess.run([sys.executable, str(ROOT / "student_resource" / "utils" / "validate_submission.py"), "--matching", str(dst),
                         "--candidate", str(ROOT / "output" / "SUBMIT_THIS" / "candidate_pairs.tsv"),
