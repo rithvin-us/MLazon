@@ -114,7 +114,10 @@ record's rank within the S1 and the gap to the S1's next candidate. It is traine
 (see below; copies jittered) with 5-fold out-of-fold estimates by S1 for the decision. Labelled validation: plain
 0.98623 -> 0.98752, density-matched 0.98487 -> 0.98683. Trained on plain validation it loses 0.0005 on the dense
 version, so the density matching is essential; competition features alone do not help (exclusivity already uses
-them) — the gain comes from S1 context.
+them) — the gain comes from S1 context. Not used for France: trained on validation made as dense as the French test
+scores it gains +0.0051 there, but those synthetic negatives have no competing S1, and on the real French rows it
+pushes both claimants of contested near-certain copies below the threshold (3,087 near-certain pairs lost, 69% of
+their records then assigned to nobody).
 
 **Threshold selection method:** grid search on validation macro F0.5 over three rules — global threshold,
 threshold plus "top-1 rescue" for S1 with nothing above threshold, and per-S1 expected-F0.5 optimisation — each
