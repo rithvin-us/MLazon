@@ -74,15 +74,15 @@ python $SRC/pipeline.py mix --run <v10 dense run> --unlabelled-from <v10s dense 
 Mix file of 2026-09-27 (reproduced byte-for-byte by step 6): US/India rows from v10 + CE + `redecide`, France rows
 from v10s + CE + `redecide`. v10s = `retrain --drop-feats n_rep_idf,n_miss_idf,a_idf_jacc,a_idf_miss1,a_idf_miss2,a_rep,a_rep_idf,a_miss_idf,a_idf_rank`.
 ```
-# 7. France (no labels): structure-based pseudo-labels, two rounds, then a rule-based fallback on the uncertain band
+# 7. France (no labels): structure-based pseudo-labels, then a rule-based fallback on the uncertain band
 #    (scripts in france/; in the repository: tools/). fr_chain = retrain --extra-parts + rescore + ce-apply + redecide + mix
-python france/build_fr_pseudo.py 0.98 0.5 v10s_ce_dense                # round 1 -> runs/<ts>-frpseudo
+python france/build_fr_pseudo.py 0.98 0.5 v10s_ce_dense                # pseudo-labelled French pairs -> runs/<ts>-frpseudo
 python france/fr_chain.py <ts>-frpseudo v10sfr
-python france/build_fr_pseudo.py 0.98 1.0 v10s_ce_dense,v10sfr_dense  # round 2: positives from the adapted model
-python france/fr_chain.py <ts>-frpseudo v10sfr2
-python france/fr_combo.py v10sfr2_dense 1 combo                        # rule fallback + count-matched threshold
+python france/fr_combo.py v10sfr_dense 1 final                         # rule fallback + count-matched threshold
 ```
-Final file: US/India rows as in step 6; France rows from step 7 (`fr_combo.py`, validator PASS).
+Final file: US/India rows as in step 6; France rows from step 7 (`fr_combo.py`, validator PASS). A second
+pseudo-label round (`build_fr_pseudo.py 0.98 1.0 v10s_ce_dense,v10sfr_dense`) was mixed on the unseen-country proxy
+and is not used.
 The test pool has ~5.8 Source 2/3 records per S1 against 4.7 in train with the same ~3.46 true matches, i.e.
 about twice the unmatched look-alikes. `redecide` copies validation negatives per score band until the band
 counts per S1 match the test scores, re-tunes the decision on that, and writes/validates the output again.

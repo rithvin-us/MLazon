@@ -142,7 +142,7 @@ S1 equal the training country's). Changes are kept by an estimated leaderboard e
 | v10s + CE | + country-IDF name agreement only (the subset that transfers to an unseen country) | 0.9859 | – |
 | mix | US/India rows: v10 + CE, test-density decision; France rows: v10s + CE | 0.9860 | 0.9758 |
 | mix + French pseudo-labels | France rows from v10s retrained with structure-based French pseudo-labels (confident exclusive owners as positives, records confidently owned by another French S1 as hard negatives); France F0.5 +0.0013 on the leaderboard | 0.9860 | 0.9760 |
-| **final** | **France rows: a second pseudo-label round (positives from the round-1 model, hard negatives from both rounds) and a rule-based fallback for the pairs the model is unsure of (0.2 <= p < 0.8); US/India rows unchanged** | **0.9860** | **pending** |
+| **final** | **France rows: rule-based fallback for the pairs the pseudo-label-adapted model is unsure of (0.2 <= p < 0.8); US/India rows unchanged** | **0.9860** | **pending** |
 
 Leaderboard decomposition (one diagnostic submission with the French rows emptied): US/India 0.983, France 0.932 for
 v9 + CE. Validation made as distractor-dense as test predicted US/India 0.984, so validation tracks the test closely;
@@ -203,15 +203,24 @@ for the exact commands).
   and 1.00x (India -> US) of the training country's; the France rule keeps 1.00x.
 - France adaptation without labels (final file). (1) Structure-based pseudo-labels: French pairs with p >= 0.98 whose
   record has no better-scoring S1 become positives, records owned by another French S1 with p >= 0.98 hard negatives,
-  a sample of p < 0.02 pairs easy negatives; the model is retrained on the training pairs plus these (weight 0.5),
-  then a second round takes positives from the adapted model and hard negatives from both rounds (weight 1.0). On
-  the proxy one round gives +0.0027 (US -> India; pseudo-positive precision 0.991, hard negatives 0.9996 true
+  a sample of p < 0.02 pairs easy negatives; the model is retrained on the training pairs plus these (weight 0.5).
+  On the proxy this gives +0.0027 (US -> India; pseudo-positive precision 0.991, hard negatives 0.9996 true
   negatives); on the leaderboard France +0.0013. (2) Rule-based fallback: French pairs the model is unsure of
   (0.2 <= p < 0.8) are accepted only when the core-name token-set similarity is >= 95, the address token-set
-  similarity >= 90, the house numbers agree and the legal forms do not conflict, and rejected otherwise; proxy
-  +0.0023 (US -> India) / +0.0015 (India -> US). On France the band holds 63,206 pairs, the rule accepts 793, and the
-  count-matched threshold becomes 0.920 (3.343 matches per S1, as US/India). Together they change 3.1% of the French
-  lists against the 0.9760 file.
+  similarity >= 90, the house numbers agree and the legal forms do not conflict, and rejected otherwise. On France
+  the band holds 76,063 pairs, the rule accepts 980, and the count-matched threshold is 0.920 (3.342 matches per S1,
+  as US/India); 0.74% of the French lists change against the 0.9760 file.
+- Do the two stack? Proxy F0.5 on the held-out country (France-style decision), without / with the rule:
+
+  | model | US -> India | India -> US |
+  |---|---|---|
+  | source country only | 0.94616 / 0.94845 | 0.96843 / 0.96988 |
+  | + pseudo-labels, round 1 | 0.94899 / **0.94982** | 0.97048 / **0.97118** |
+  | + pseudo-labels, round 2 | 0.94832 / 0.94824 | 0.97147 / 0.97146 |
+
+  The rule adds +0.0008 / +0.0007 on top of round 1, including India -> US where the threshold sits above 0.8 as it
+  does for France (0.815 -> 0.835). A second pseudo-label round (positives from the adapted model, hard negatives
+  from both rounds, weight 1.0) is mixed (-0.0007 / +0.0010) and cancels the rule, so the final file uses round 1.
 - Checked on France and not the cause of its gap: blocking (99.2% of near-certain French copies are retrieved),
   tokenisation (IDF tables are built per country from the scored data itself, unseen tokens get the maximum weight;
   character-level fuzzy similarities), formatting variants (departement names, "No.", bis/ter, accents, case: kept

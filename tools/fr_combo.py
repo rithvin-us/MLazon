@@ -1,9 +1,10 @@
-"""Final France rows = both France probes combined: scores of the round-2 pseudo-label model (v10sfr2_dense: v10s +
-structure-based French pseudo-labels x2 + L12 CE, test-density run) with the rule-based fallback in its uncertain band
-(p in [0.2, 0.8): accept iff core name token-set >= 95, address token-set >= 90, same house number, no legal-form
-conflict, else reject), then exclusivity and the count-matched France threshold (matches/S1 = labelled countries',
-same grid as pipeline.shape_matched_selection). US/India rows unchanged from the LB-verified base file.
-  python fr_combo.py [SRC_RUN=v10sfr2_dense] [RULE=1] [TAG=combo]
+"""Final France rows: scores of the pseudo-label-adapted model (v10sfr_dense: v10s + structure-based French
+pseudo-labels + L12 CE, test-density run) with the rule-based fallback in its uncertain band (p in [0.2, 0.8): accept
+iff core name token-set >= 95, address token-set >= 90, same house number, no legal-form conflict, else reject), then
+exclusivity and the count-matched France threshold (matches/S1 = labelled countries', same grid as
+pipeline.shape_matched_selection). US/India rows unchanged from the LB-verified base file.
+  python fr_combo.py [SRC_RUN=v10sfr_dense] [RULE=1] [TAG=final]
+SRC_RUN=v10sfr2_dense (second pseudo-label round) gives the "combo" file; the proxy (loco_combo.py) prefers round 1.
 TAG=check writes nothing and compares the French rows with PROBE_france_v10sfr2 (RULE=0 must reproduce it exactly)."""
 import os
 import subprocess
@@ -19,9 +20,9 @@ ROOT = Path(r"D:\amazon-ml")
 R = pp.RUNS_DIR
 SUB = ROOT / "output" / "submissions"
 BASE = SUB / "BEST_LB0.975968_mix_v10sfr_matching_results.tsv"  # LB-verified: US/India rows come from here
-SRC_RUN = sys.argv[1] if len(sys.argv) > 1 else "v10sfr2_dense"
+SRC_RUN = sys.argv[1] if len(sys.argv) > 1 else "v10sfr_dense"
 RULE = sys.argv[2] != "0" if len(sys.argv) > 2 else True
-TAG = sys.argv[3] if len(sys.argv) > 3 else "combo"
+TAG = sys.argv[3] if len(sys.argv) > 3 else "final"
 
 cm = pp.scan_norm("test", "s1").select(pl.col("idx").alias("s1_idx"), "country_n", pl.col("entity_id").alias("source1_entity_id")).collect()
 fr = cm.filter(pl.col("country_n") == "france")
