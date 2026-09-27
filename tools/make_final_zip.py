@@ -27,7 +27,7 @@ with zipfile.ZipFile(zp, "w", zipfile.ZIP_DEFLATED) as z:
         z.write(f, f"code/business_entity_resolution/src/{f.name}")
     for fn in ("README.md", "requirements.txt"):
         z.write(PROJ / fn, f"code/business_entity_resolution/{fn}")
-    for fn in ("build_fr_pseudo.py", "fr_chain.py", "fr_combo.py"):
+    for fn in ("build_fr_pseudo.py", "fr_chain.py", "fr_bge_chain.py", "fr_combo.py"):
         z.write(ROOT / "tools" / fn, f"code/business_entity_resolution/france/{fn}")
     z.write(ROOT / "docs" / "Documentation_template.md", "Documentation_template.md")
 with zipfile.ZipFile(zp) as z:

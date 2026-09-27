@@ -100,8 +100,9 @@ training S1 by log-loss (the decision relies on calibrated probabilities), train
 up to 6,000 rounds (best iteration 5,437).
 Training data is streamed from per-chunk parquet files into a `QuantileDMatrix`.
 
-**Stage 3 — cross-encoder on the uncertain band:** `cross-encoder/ms-marco-MiniLM-L6-v2` (Apache-2.0, 22M
-parameters; the L12 variant, 33M parameters, in the final run) fine-tuned for 2 epochs on 1M training pairs ("name | address" of S1 vs candidate, balanced
+**Stage 3 — cross-encoders on the uncertain band:** `cross-encoder/ms-marco-MiniLM-L6-v2` (Apache-2.0, 22M
+parameters; in the final run the L12 variant, 33M parameters, plus the multilingual `BAAI/bge-reranker-base`, MIT,
+278M, stacked as a third input) fine-tuned for 2 epochs on 1M training pairs ("name | address" of S1 vs candidate, balanced
 positives / hard negatives). It re-scores only pairs with stage-1 probability in [0.02, 0.995) — 2.7M of the
 20.1M test pairs — and a monotone depth-3 XGBoost stacks [logit p, cross-encoder logit] (fit on the validation
 band with out-of-fold estimates by block). Band AUC: stage-1 0.952, cross-encoder 0.944, stacked 0.969.
@@ -142,7 +143,7 @@ S1 equal the training country's). Changes are kept by an estimated leaderboard e
 | v10s + CE | + country-IDF name agreement only (the subset that transfers to an unseen country) | 0.9859 | – |
 | mix | US/India rows: v10 + CE, test-density decision; France rows: v10s + CE | 0.9860 | 0.9758 |
 | mix + French pseudo-labels | France rows from v10s retrained with structure-based French pseudo-labels (confident exclusive owners as positives, records confidently owned by another French S1 as hard negatives); France F0.5 +0.0013 on the leaderboard | 0.9860 | 0.9760 |
-| **final** | **France rows: rule-based fallback for the pairs the pseudo-label-adapted model is unsure of (0.2 <= p < 0.8); US/India rows unchanged** | **0.9860** | **pending** |
+| **final** | **both cross-encoders (MiniLM-L12 + multilingual bge-reranker-base) stacked on every row; France rows: rule-based fallback for the pairs the pseudo-label-adapted model is unsure of (0.2 <= p < 0.8)** | **0.9862** | **pending** |
 
 Leaderboard decomposition (one diagnostic submission with the French rows emptied): US/India 0.983, France 0.932 for
 v9 + CE. Validation made as distractor-dense as test predicted US/India 0.984, so validation tracks the test closely;
@@ -173,8 +174,8 @@ nudged distractors. Everything runs on a 16 GB laptop by streaming per country a
 `normalize.py`, `indic.py`, `blocking.py`, `features.py`, `stage2.py`, `config.py`, `io_utils.py`,
 `tracking.py`, `hwmon.py`. `prep` → `train` → `predict --run <train_run_id>` regenerates both output files;
 `ce-train` / `ce-apply` add stage 3, `redecide` the test-density decision, `mix` the per-country model choice, and
-`france/` (`build_fr_pseudo.py`, `fr_chain.py`, `fr_combo.py`) the France adaptation of the final file (see README
-for the exact commands).
+`france/` (`build_fr_pseudo.py`, `fr_chain.py`, `fr_bge_chain.py`, `fr_combo.py`) the France adaptation of the final
+file (see README for the exact commands).
 
 ### B. Additional Results
 - Final candidate set on test: 19,481,044 pairs (11.24 per S1; 2 S1 with no candidates).
@@ -192,8 +193,10 @@ for the exact commands).
   Address IDF weights do not transfer between countries (their vocabularies differ too much); name IDF weights do.
   Monotone constraints and depth 6 did not help.
 - Stage 3 with a stronger reranker: `BAAI/bge-reranker-base` (MIT, 278M, multilingual) fine-tuned on 800k pairs and
-  stacked with the MiniLM-L12 cross-encoder: validation 0.98612 -> 0.98623. The ambiguity left on US/India is
-  not a model-capacity problem.
+  stacked with the MiniLM-L12 cross-encoder: validation 0.98612 -> 0.98623 (density-matched 0.9848 -> 0.9849); on the
+  pseudo-label-adapted France model 0.98578 -> 0.98604 (density-matched 0.98433 -> 0.98451). Used in the final file
+  for every row; the ambiguity left on US/India is not a model-capacity problem. With both cross-encoders the France
+  scores are less inflated: 3.343 matches per S1 is reached at a threshold of 0.865 instead of 0.920.
 - Where the remaining validation loss is (v10 + CE): true matches the model rejects 0.0074 (75% of them are copies
   with an empty address whose exact name also appears on unowned copies: 39% match rate even when unique), blocking
   misses 0.0046, false positives 0.0019. The model is calibrated in every slice checked (empty-address copies by
@@ -207,9 +210,10 @@ for the exact commands).
   On the proxy this gives +0.0027 (US -> India; pseudo-positive precision 0.991, hard negatives 0.9996 true
   negatives); on the leaderboard France +0.0013. (2) Rule-based fallback: French pairs the model is unsure of
   (0.2 <= p < 0.8) are accepted only when the core-name token-set similarity is >= 95, the address token-set
-  similarity >= 90, the house numbers agree and the legal forms do not conflict, and rejected otherwise. On France
-  the band holds 76,063 pairs, the rule accepts 980, and the count-matched threshold is 0.920 (3.342 matches per S1,
-  as US/India); 0.74% of the French lists change against the 0.9760 file.
+  similarity >= 90, the house numbers agree and the legal forms do not conflict, and rejected otherwise. With the
+  MiniLM-L12 cross-encoder the band holds 76,063 French pairs and the rule accepts 980 (0.74% of the French lists
+  change against the 0.9760 file); in the final file (both cross-encoders) it holds 79,582 and the rule accepts
+  1,247, at 3.343 matches per S1 as US/India.
 - Do the two stack? Proxy F0.5 on the held-out country (France-style decision), without / with the rule:
 
   | model | US -> India | India -> US |

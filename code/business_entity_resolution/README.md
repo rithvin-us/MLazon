@@ -78,11 +78,13 @@ from v10s + CE + `redecide`. v10s = `retrain --drop-feats n_rep_idf,n_miss_idf,a
 #    (scripts in france/; in the repository: tools/). fr_chain = retrain --extra-parts + rescore + ce-apply + redecide + mix
 python france/build_fr_pseudo.py 0.98 0.5 v10s_ce_dense                # pseudo-labelled French pairs -> runs/<ts>-frpseudo
 python france/fr_chain.py <ts>-frpseudo v10sfr
-python france/fr_combo.py v10sfr_dense 1 final                         # rule fallback + count-matched threshold
+python france/fr_bge_chain.py   # v10sfr rescored with both cross-encoders (L12 + bge) -> redecide -> fr_combo.py:
+#   rule fallback + threshold at 3.343 matches/S1; US/India rows from the both-cross-encoder mix (step 4 with
+#   --ce-dir models/ce_<train_run_id>,models/ce_bge_base, then steps 5-6)
 ```
-Final file: US/India rows as in step 6; France rows from step 7 (`fr_combo.py`, validator PASS). A second
-pseudo-label round (`build_fr_pseudo.py 0.98 1.0 v10s_ce_dense,v10sfr_dense`) was mixed on the unseen-country proxy
-and is not used.
+Final file: US/India rows from v10 + both cross-encoders + `redecide`; France rows from step 7 (`fr_bge_chain.py`,
+validator PASS). A second pseudo-label round (`build_fr_pseudo.py 0.98 1.0 v10s_ce_dense,v10sfr_dense`) was mixed on
+the unseen-country proxy and is not used.
 The test pool has ~5.8 Source 2/3 records per S1 against 4.7 in train with the same ~3.46 true matches, i.e.
 about twice the unmatched look-alikes. `redecide` copies validation negatives per score band until the band
 counts per S1 match the test scores, re-tunes the decision on that, and writes/validates the output again.
