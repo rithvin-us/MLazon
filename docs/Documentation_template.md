@@ -141,7 +141,8 @@ S1 equal the training country's). Changes are kept by an estimated leaderboard e
 | v10 + CE | + country-IDF name and address agreement (stage 1 0.9832 -> 0.9850) | 0.9861 | – |
 | v10s + CE | + country-IDF name agreement only (the subset that transfers to an unseen country) | 0.9859 | – |
 | mix | US/India rows: v10 + CE, test-density decision; France rows: v10s + CE | 0.9860 | 0.9758 |
-| **mix + French pseudo-labels** | **France rows from v10s retrained with structure-based French pseudo-labels (confident exclusive owners as positives, records confidently owned by another French S1 as hard negatives); France F0.5 +0.0013 on the leaderboard** | **0.9860** | **0.9760** |
+| mix + French pseudo-labels | France rows from v10s retrained with structure-based French pseudo-labels (confident exclusive owners as positives, records confidently owned by another French S1 as hard negatives); France F0.5 +0.0013 on the leaderboard | 0.9860 | 0.9760 |
+| **final** | **France rows: a second pseudo-label round (positives from the round-1 model, hard negatives from both rounds) and a rule-based fallback for the pairs the model is unsure of (0.2 <= p < 0.8); US/India rows unchanged** | **0.9860** | **pending** |
 
 Leaderboard decomposition (one diagnostic submission with the French rows emptied): US/India 0.983, France 0.932 for
 v9 + CE. Validation made as distractor-dense as test predicted US/India 0.984, so validation tracks the test closely;
@@ -171,7 +172,9 @@ nudged distractors. Everything runs on a 16 GB laptop by streaming per country a
 `pipeline.py` (entry point: `prep`, `train`, `predict`, `decide`, `rescore`, `submit`), `prep.py`,
 `normalize.py`, `indic.py`, `blocking.py`, `features.py`, `stage2.py`, `config.py`, `io_utils.py`,
 `tracking.py`, `hwmon.py`. `prep` → `train` → `predict --run <train_run_id>` regenerates both output files;
-`ce-train` / `ce-apply` add stage 3, `redecide` the test-density decision (see README for the exact commands).
+`ce-train` / `ce-apply` add stage 3, `redecide` the test-density decision, `mix` the per-country model choice, and
+`france/` (`build_fr_pseudo.py`, `fr_chain.py`, `fr_combo.py`) the France adaptation of the final file (see README
+for the exact commands).
 
 ### B. Additional Results
 - Final candidate set on test: 19,481,044 pairs (11.24 per S1; 2 S1 with no candidates).
@@ -198,5 +201,21 @@ nudged distractors. Everything runs on a 16 GB laptop by streaming per country a
   these are genuinely ambiguous given name and address.
 - Unseen-country match count: on the proxy the best matches per S1 for the held-out country is 0.96x (US -> India)
   and 1.00x (India -> US) of the training country's; the France rule keeps 1.00x.
+- France adaptation without labels (final file). (1) Structure-based pseudo-labels: French pairs with p >= 0.98 whose
+  record has no better-scoring S1 become positives, records owned by another French S1 with p >= 0.98 hard negatives,
+  a sample of p < 0.02 pairs easy negatives; the model is retrained on the training pairs plus these (weight 0.5),
+  then a second round takes positives from the adapted model and hard negatives from both rounds (weight 1.0). On
+  the proxy one round gives +0.0027 (US -> India; pseudo-positive precision 0.991, hard negatives 0.9996 true
+  negatives); on the leaderboard France +0.0013. (2) Rule-based fallback: French pairs the model is unsure of
+  (0.2 <= p < 0.8) are accepted only when the core-name token-set similarity is >= 95, the address token-set
+  similarity >= 90, the house numbers agree and the legal forms do not conflict, and rejected otherwise; proxy
+  +0.0023 (US -> India) / +0.0015 (India -> US). On France the band holds 63,206 pairs, the rule accepts 793, and the
+  count-matched threshold becomes 0.920 (3.343 matches per S1, as US/India). Together they change 3.1% of the French
+  lists against the 0.9760 file.
+- Checked on France and not the cause of its gap: blocking (99.2% of near-certain French copies are retrieved),
+  tokenisation (IDF tables are built per country from the scored data itself, unseen tokens get the maximum weight;
+  character-level fuzzy similarities), formatting variants (departement names, "No.", bis/ter, accents, case: kept
+  95.6% of the time), and the threshold (France scores are not deflated: the model over-matched France before the
+  country-IDF features, and the count-matched threshold is 0.92, not lower).
 - Loss breakdown (v6 validation, F0.5 points lost): model misses 0.0077, S1 with zero correct matches
   0.0044, false positives 0.0039, blocking misses 0.0034, singleton false positives 0.0009.

@@ -24,3 +24,4 @@ Thumbs.db
 # Large artefacts (GitHub 100 MB file limit): rebuilt by the pipeline
 models/
 *_submission*.zip
+Techiva_final*.zip
