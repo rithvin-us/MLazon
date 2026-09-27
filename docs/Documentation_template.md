@@ -107,6 +107,15 @@ positives / hard negatives). It re-scores only pairs with stage-1 probability in
 20.1M test pairs — and a monotone depth-3 XGBoost stacks [logit p, cross-encoder logit] (fit on the validation
 band with out-of-fold estimates by block). Band AUC: stage-1 0.952, cross-encoder 0.944, stacked 0.969.
 
+**Stage 4 — competition and S1-context re-scoring (final file, US/India rows):** a depth-4 monotone XGBoost on the
+stacked score p of every (S1, record) pair plus features computed from all scores: the best competing S1's p for the
+same record, the margin to it, competitors with p >= 0.2, this S1's rank for the record, the S1's best p, the
+record's rank within the S1 and the gap to the S1's next candidate. It is trained on density-matched validation
+(see below; copies jittered) with 5-fold out-of-fold estimates by S1 for the decision. Labelled validation: plain
+0.98623 -> 0.98752, density-matched 0.98487 -> 0.98683. Trained on plain validation it loses 0.0005 on the dense
+version, so the density matching is essential; competition features alone do not help (exclusivity already uses
+them) — the gain comes from S1 context.
+
 **Threshold selection method:** grid search on validation macro F0.5 over three rules — global threshold,
 threshold plus "top-1 rescue" for S1 with nothing above threshold, and per-S1 expected-F0.5 optimisation — each
 with and without **exclusivity** (every pool record goes only to the S1 that scores it highest, matching the
@@ -143,7 +152,8 @@ S1 equal the training country's). Changes are kept by an estimated leaderboard e
 | v10s + CE | + country-IDF name agreement only (the subset that transfers to an unseen country) | 0.9859 | – |
 | mix | US/India rows: v10 + CE, test-density decision; France rows: v10s + CE | 0.9860 | 0.9758 |
 | mix + French pseudo-labels | France rows from v10s retrained with structure-based French pseudo-labels (confident exclusive owners as positives, records confidently owned by another French S1 as hard negatives); France F0.5 +0.0013 on the leaderboard | 0.9860 | 0.9760 |
-| **final** | **both cross-encoders (MiniLM-L12 + multilingual bge-reranker-base) stacked on every row; France rows: rule-based fallback for the pairs the pseudo-label-adapted model is unsure of (0.2 <= p < 0.8)** | **0.9862** | **pending** |
+| both cross-encoders | MiniLM-L12 + multilingual bge-reranker-base stacked on every row; France rows: rule-based fallback for the pairs the pseudo-label-adapted model is unsure of (0.2 <= p < 0.8) | 0.9862 | – |
+| **final: + stage 2** | **US/India rows re-scored by a stage-2 model on competition and S1-context features of the stacked scores, trained on density-matched validation (density-matched val 0.98487 -> 0.98683); France rows as above** | **0.9875** | **pending** |
 
 Leaderboard decomposition (one diagnostic submission with the French rows emptied): US/India 0.983, France 0.932 for
 v9 + CE. Validation made as distractor-dense as test predicted US/India 0.984, so validation tracks the test closely;
@@ -225,6 +235,16 @@ file (see README for the exact commands).
   The rule adds +0.0008 / +0.0007 on top of round 1, including India -> US where the threshold sits above 0.8 as it
   does for France (0.815 -> 0.835). A second pseudo-label round (positives from the adapted model, hard negatives
   from both rounds, weight 1.0) is mixed (-0.0007 / +0.0010) and cancels the rule, so the final file uses round 1.
+- What else makes France hard (test, per country: US / India / France): cities covering 80% of S1 2,915 / 174 / 13;
+  pool records scored >= 0.2 for two or more S1 0.9% / 1.1% / 3.6%; uncertain pairs per S1 0.165 / 0.128 / 0.307. Name
+  genericity is not it (S1 names shared with another S1: 37% / 53% / 51%): French look-alikes share a city.
+- Label-free checks of the French rows (`fr_quality.py`): matches-per-S1 distribution identical in shape to US/India;
+  French candidate addresses use the departement instead of the region half the time, at no cost (copies identical
+  otherwise score 0.9996 either way). Accepted pairs whose house numbers differ are 1.7% in France vs 15.9% in
+  US/India, where such pairs (same name, same street, different number) are true 18-42% of the time; the model gives
+  the French ones ~0.05 already at stage 1, and French S1 with 2+ such candidates end with 0.06 fewer matches instead of
+  0.1-0.17 more — about 3-4k missed French matches. Extra words: "groupe/france/developpement" pairs are rejected 96%
+  of the time; association words (club, amicale, comite) are rejected because the record is another S1's.
 - Checked on France and not the cause of its gap: blocking (99.2% of near-certain French copies are retrieved),
   tokenisation (IDF tables are built per country from the scored data itself, unseen tokens get the maximum weight;
   character-level fuzzy similarities), formatting variants (departement names, "No.", bis/ter, accents, case: kept
